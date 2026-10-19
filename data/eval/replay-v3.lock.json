@@ -1,0 +1,289 @@
+{
+  "builder_sha256": "03d9ae1627fb1768c1941d961021a8df10c78ee655ed1130b927b7e36e7f5e0f",
+  "dependencies": {
+    "OpenCC": "1.1.9",
+    "pypinyin": "0.55.0"
+  },
+  "group_cap": 20,
+  "input_hashes": {
+    "data/cache/training-c4-v1/raw-prefix.jsonl": "a974859c50863ec18de3b181293af76daabb7fa6f72066d9e0f4132f7187a6b2",
+    "data/cache/training-c4-v1/train.txt": "b3488786430c3cc940a8f5a0a37a4050a1e6edee08e91b85721ccffb1af5e2c1",
+    "data/cache/training-c4-v1/validation.txt": "086f3e2d9966162469ec6704230dc41481fc223575783cb2837bbe0fd2de1813",
+    "data/eval/context-dev-v2.jsonl": "2a25c4e845e25c87aa882f2fda9bf985daf0d6f58eb8d1008dc205d240db5652",
+    "data/eval/sentences-v1.tsv": "f0c5916a555039b16d8da7337114b5514f6f4f6799fda3da1e006e50ac0b295c",
+    "data/eval/tatoeba-heldout-v1.jsonl": "da71dd08f4aa95f2eb1a54a4e7285fa2eb33cf4b1aa092706a43d4c37bceba32"
+  },
+  "inventory": {
+    "author_counts": [
+      [
+        "fucongcong",
+        7462
+      ],
+      [
+        "GlossaMatik",
+        3311
+      ],
+      [
+        "sadhen",
+        1820
+      ],
+      [
+        "verdastelo9604",
+        1738
+      ],
+      [
+        "sysko",
+        1723
+      ],
+      [
+        "jan_OkulaJu",
+        1617
+      ],
+      [
+        "crescat",
+        906
+      ],
+      [
+        "BobbyLee",
+        730
+      ],
+      [
+        "fenfang557",
+        696
+      ],
+      [
+        "iiujik",
+        633
+      ],
+      [
+        "U2FS",
+        594
+      ],
+      [
+        "jiangche",
+        592
+      ],
+      [
+        "vicch",
+        590
+      ],
+      [
+        "slo_oth",
+        549
+      ],
+      [
+        "Martha",
+        547
+      ],
+      [
+        "trieuho",
+        509
+      ],
+      [
+        "fercheung",
+        505
+      ],
+      [
+        "eastasiastudent",
+        442
+      ],
+      [
+        "zhouj1955",
+        438
+      ],
+      [
+        "ydcok",
+        351
+      ]
+    ],
+    "authors": 789,
+    "eligible_records": 38874,
+    "group_count": 742,
+    "largest_group_sizes": [
+      24620,
+      774,
+      733,
+      633,
+      592,
+      547,
+      509,
+      351,
+      278,
+      235,
+      231,
+      224,
+      221,
+      195,
+      152,
+      150,
+      142,
+      140,
+      128,
+      122
+    ],
+    "selected_authors": {
+      "dev": 186,
+      "test": 365
+    },
+    "selected_groups": {
+      "dev": 186,
+      "test": 352
+    },
+    "selected_largest_groups": {
+      "dev": [
+        [
+          "6d2a5004652354f795efea7c44021d6effbca2b8300a0af99c293d54f304e05f",
+          20
+        ],
+        [
+          "cd7b4b9ddfb376bff4ce6245e3a69019502d0c5f747b70d12d84948730d75beb",
+          20
+        ],
+        [
+          "f6f37a4426498fac12cfd3d024ecca0358afba52bf76865250227f4e5fdce941",
+          20
+        ],
+        [
+          "d3cba81324c3237e5d1be53e0bb81ba3197ffa82b04a22f8bcef850340ab88e2",
+          20
+        ],
+        [
+          "876f8b01288f50f8dd84621360de61dc4324690f8914cccbe0beb0b5e0049529",
+          20
+        ],
+        [
+          "2312cce4aacc4fef7337e75323198351e9f52970c335642acd5a6d0186906b8e",
+          20
+        ],
+        [
+          "939f5bee71abb6b28acee65df85698c56d396b4b1b24eae0080e1e618a649ad8",
+          20
+        ],
+        [
+          "21834ee138137090116a707aa4188346e19d5ace80eea553162fc15a540859fe",
+          20
+        ],
+        [
+          "2d60c1f1dc2d1f54a4a2ab079e4b9881131e4872ac833a5fb44dbb3a86ba8458",
+          20
+        ],
+        [
+          "70bd85f0340e163e469163ebbfced1ebf783690dcacc0e5dc38df51d556d31fa",
+          20
+        ]
+      ],
+      "test": [
+        [
+          "9b3c9fb20b98ae7efaebc52f32950c89f9936c9012f17c9134a48a5814686390",
+          20
+        ],
+        [
+          "ef932a47e737cca380ef324d30a62d8b8785b66610b08afc101c631ee3d98e9b",
+          20
+        ],
+        [
+          "36a0b3140b9cadebb98415a190e50eefafb572c984f149f906808f7162e6b2f2",
+          20
+        ],
+        [
+          "25e214ae479972a3426f9dbf3a45d56039c9ba5d2761cebd7b0522a2d5d9bdce",
+          20
+        ],
+        [
+          "945a7d830933e86c7a6af1a78fcaa4e20d1226179e9863dadd3892f0fb86ac9c",
+          20
+        ],
+        [
+          "bf43cfbb74dd9ac6fedff8cabe2efe16e87c597a2d6e29f64e5250b100c5749a",
+          20
+        ],
+        [
+          "013d349be94b2f4b239b4c2faf56ab9829ddb4f6aee39ae43749aa1953fe49c6",
+          20
+        ],
+        [
+          "151862a21503fa75ed5fd809b383f72b33585c3f5c4953b815ef5928af18773f",
+          20
+        ],
+        [
+          "50f6dfe1d62050a6e958735c0eb27f6e8b9f10ff80842e03d9d6ad25067a7ec2",
+          20
+        ],
+        [
+          "b83f051fc3886e231418c82c076f01d4847bd388183b6cdc8ecbf8312b148b0d",
+          20
+        ]
+      ]
+    },
+    "stats": {
+      "capped_dev": 1691,
+      "capped_groups_dev": 252,
+      "capped_groups_test": 485,
+      "capped_test": 3370,
+      "eligible_dev": 4616,
+      "eligible_test": 33194,
+      "excluded_local_c4": 31,
+      "excluded_previous": 1004
+    }
+  },
+  "largest_group_sizes": [
+    24620,
+    774,
+    733,
+    633,
+    592,
+    547,
+    509,
+    351,
+    278,
+    235,
+    231,
+    224,
+    221,
+    195,
+    152,
+    150,
+    142,
+    140,
+    128,
+    122
+  ],
+  "rules": {
+    "context": "first half by selection hash no context; second half 3..min(12,length-3) characters, hash-selected",
+    "grouping": "connected components of same non-anonymous author, normalized exact duplicates, or edit distance <=1 with both lengths >=10",
+    "length": [
+      6,
+      32
+    ],
+    "pronunciation": "pypinyin full original sentence preserving punctuation before CJK-index context split; automatic diagnostic, not human gold",
+    "sampling_limit": "author/near-duplicate balanced diagnostic sampling; not natural population frequency or 3000 independent groups",
+    "selection": "lowest source ID per normalized duplicate, then group-local hash first 20, then global ascending SHA256(seed+NUL+select+NUL+normalized_text)",
+    "simplified": "OpenCC t2s unchanged",
+    "split": "SHA256(seed+NUL+group_id) modulo 3: 0 dev, otherwise test",
+    "training_dedup": "normalized substring in every locally accessible C4 raw document/train/validation; incomplete training overlap audit"
+  },
+  "schema_version": 1,
+  "seed": "yanliu-replay-v3-20261012",
+  "selection_sha256": {
+    "dev": "1c94f3c19090f6f4c3ae883371453ee1023a993eb4bf8377afb31098e36cd20c",
+    "test": "7b79b4b385929332d7958102f7a11fcf52147ccc1e0977db99a33811440b6ea5"
+  },
+  "source": {
+    "license": "CC BY 2.0 FR",
+    "rows": 89179,
+    "sha256": "a8c53945a8806ce7b6e220585294bf2df4c021f2adfe9d0efc49b6db7e9c0af5",
+    "size": 1722861,
+    "url": "https://downloads.tatoeba.org/exports/per_language/cmn/cmn_sentences_detailed.tsv.bz2"
+  },
+  "stats": {
+    "capped_dev": 1691,
+    "capped_groups_dev": 252,
+    "capped_groups_test": 485,
+    "capped_test": 3370,
+    "eligible_dev": 4616,
+    "eligible_test": 33194,
+    "excluded_local_c4": 31,
+    "excluded_previous": 1004
+  },
+  "training_overlap_limit": "Only local C4 prefix documents were accessible; full upstream C4/LCCC overlap unknown."
+}

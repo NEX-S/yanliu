@@ -1,0 +1,9 @@
+Tatoeba replay diagnostic v3. Automatically generated pinyin/context, not human gold.
+Source: https://downloads.tatoeba.org/exports/per_language/cmn/cmn_sentences_detailed.tsv.bz2
+Snapshot SHA256: a8c53945a8806ce7b6e220585294bf2df4c021f2adfe9d0efc49b6db7e9c0af5
+License: CC BY 2.0 FR https://creativecommons.org/licenses/by/2.0/fr/
+Each contributor, sentence URL and original text is retained in replay-v3-annotations.jsonl.
+Author/near-duplicate group cap20 balanced sampling, not natural population frequency.
+1000 dev cases in 186 independent groups; 2000 test cases in 352 independent groups.
+Full original sentence pronunciation precedes CJK-index splitting; raw punctuation is retained in context.
+Training overlap was checked only against accessible local C4, not full training corpora.

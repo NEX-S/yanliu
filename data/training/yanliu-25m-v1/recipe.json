@@ -1,0 +1,220 @@
+{
+  "format": "yanliu-25m-v1-public-recipe-v1",
+  "upstream": {
+    "source": "metasequoiaime/pinyin-ime-reranker-25M",
+    "url": "https://huggingface.co/metasequoiaime/pinyin-ime-reranker-25M/resolve/75295b373a7ef0d14e9bebd32c1625c9cfcfea49/sentence-model.safetensors",
+    "revision": "75295b373a7ef0d14e9bebd32c1625c9cfcfea49",
+    "license": "Apache-2.0",
+    "sha256": "0a6ecba69bf1d39c7eb49549c716477dd6c03fdf05757773e1f50435262fb469",
+    "size": 25480184
+  },
+  "initial_derivation": {
+    "context_before": 128,
+    "context_after": 64,
+    "operation": "Keep pos.weight first64 rows; all other tensor bytes unchanged; preserve inherited metadata and add parent_model_sha256/window_derivation.",
+    "historical_sha256": "4d4bc10ee9e1d0ca82f2bad3a0ee7c7ba598dc1fcb0dc79ef267914a40473448"
+  },
+  "data": {
+    "train.jsonl": {
+      "sha256": "dc131452a7901b1738d8c2d2fe2b2bd96f94d88920deb05a4211d824ee7c15bf",
+      "size": 92269,
+      "cases": 312,
+      "groups": 78
+    },
+    "novel-dev.jsonl": {
+      "sha256": "56e62b7965f7a56576e6f5e701c3e3aa394a09b8f56b229fe4d8ea663c11bf9e",
+      "size": 10823,
+      "cases": 44,
+      "groups": 11
+    },
+    "mixed-dev.jsonl": {
+      "sha256": "1a944092c415c5a549d235befa7ba84ae7b0867d5f7470957e3a052b97d0e86e",
+      "size": 27068,
+      "cases": 94,
+      "groups": 45
+    }
+  },
+  "generation": {
+    "teacher_model": "deepseek-flash",
+    "pypinyin": "0.55.0",
+    "public_pairs": "data/training/homophone-pairs-v1.json",
+    "public_pairs_sha256": "a6f3df352e408c971c4bbc3e1a42932c636d0d255fb677c17ad25af1cb721779",
+    "accepted_source_cases": 388,
+    "accepted_source_cases_sha256": "c4052737eae04c80533797b0fc94b7adbea9e541f656089f1ce22478760d2c51",
+    "raw_gateway_requests_and_responses": "not distributed; no private conversations or system learning used",
+    "mixed_dev_additions": "50 public known-word/different-context cases, including self-authored diagnostics"
+  },
+  "split": {
+    "original_connected_group_rule": "Same full input, same target, identical normalized context, or >=12-char normalized context with SequenceMatcher ratio >=.9 connected. SHA 70/15/15 on novel connected groups.",
+    "training_roles": {
+      "novel_input": 180,
+      "known_public_homophone_curriculum": 132
+    },
+    "known132_interpretation": "These former known-regression cases are exact training examples in this targeted curriculum; improvement is training fit.",
+    "novel_dev": "44 cases/11 groups, input/gold disjoint from training",
+    "mixed_dev": "44 novel cases plus50 known-input/different-context cases,45 groups; observed development only",
+    "other_previously_observed_sets": "32 originally held-out cases and common/context/replay are regression only; not used by this training or selection entrypoint"
+  },
+  "optimizer": {
+    "name": "AdamW",
+    "betas": [
+      0.9,
+      0.95
+    ],
+    "weight_decay": 0.01,
+    "clip_norm": 1.0,
+    "lr": 1e-05,
+    "batch": 4,
+    "threads": 2,
+    "seed": 20261019,
+    "epochs": 3
+  },
+  "loss": "CE(mean_character_logp - direct_word_static_gap * 2 + leader_margin_0.25); gold-set marginal CE",
+  "historical_training": {
+    "recipe_sha256": "a82fb2627bb344d86699f089f4917fba749e27f2641162e46a1210ea22a63920",
+    "torch": "2.14.1+cpu",
+    "safetensors": "0.8.0",
+    "initial_model_sha256": "4d4bc10ee9e1d0ca82f2bad3a0ee7c7ba598dc1fcb0dc79ef267914a40473448",
+    "binary_sha256": "ff51ff95d97f7e01c4102824efa5f706dbfd885a7c15a523847c141c48e7e226",
+    "config": {
+      "vocab": 12288,
+      "n_layer": 8,
+      "n_head": 8,
+      "n_embd": 448,
+      "context": 64,
+      "dropout": 0.1
+    },
+    "source": {
+      "src/bin/yanliu/evaluate.rs": "22064f25fa79c8120a56ae7f890f02bc48e86b60f36771d85d239971593a6f80",
+      "src/bin/yanliu-ibus/config.rs": "8ef5523167ee58ef65db6a653040e870e983082e59b733786168edcad23652da",
+      "src/bin/yanliu-ibus.rs": "e992916b72528f46d3eb21be84bf105133c5b402ffa749f90ccaf8857cbf9b0a",
+      "src/bin/yanliu.rs": "8ac5abc3203b2f95a4777c83ecef2ab6a323232c79b84a7060bb44ce7f6bba12",
+      "src/decoder.rs": "07d4f0223039970358e752e3eacf9da8d634113ce4ccb369cff5b13227a0f690",
+      "src/dictionary.rs": "7da50c70be1d8c59b11f79d10e6ba3fd545546fce93a3e383d6d010a72f18f16",
+      "src/ibus.rs": "ea4accb12a23d29205bd4d300be03335db196e925a731203fc2c12d89f9c37b8",
+      "src/learning.rs": "51475c4abb55123fac876176ab1cf65417999e01d37b723b48e885a931f39393",
+      "src/lib.rs": "983946c058ff8186a3b98effe6ee617a15de63020d79c904df55fdd9926b10ab",
+      "src/model/openvino.rs": "7d4759c08e7e2290242616837f3a03653fd53c0c3ec547d2d250cb73f72db865",
+      "src/model.rs": "48744b57fad8fce9e3b0ab5aa7a3955c3e1fa1ef858f727d8f47879fd6fafbca",
+      "src/session.rs": "45a911d9ff6a2d8f83b8837b7574a1dfa5d73716de04821e2b3f91b62c5a3752",
+      "Cargo.toml": "942ccbef87b870f5d33504d1bbcf461216cc928c7fd08afdc9fa662d69868f4d",
+      "Cargo.lock": "4c73f490cbe0ef49dc4788bf4fae45b7422fd2c5f2cf5ea417d19e3f588126fd",
+      "scripts/train_ranker.py": "44c5be03d9b15d201eefa0549e202bb0581babac70395989a3aab276cb13297e",
+      "scripts/training-requirements.txt": "57600efdda39c1aa2bb500c3d2a9f92516fa36ef99872d0ac5381d39b27419fb",
+      "vendor/chinese-ime-lm/src/lib.rs": "b6cd88ea19107f5f84773cee0663aee063657ebc1d754d137665ebdb815f344d",
+      "vendor/chinese-ime-training/neural/model.py": "0b7fb41aa8a4356fa7757aa1b9e84d5022fa33a5436e695dcc1116b0d34c1f9b",
+      "vendor/chinese-ime-training/neural/initialize.py": "160af2dc697660b74ab74031283f768c9ec26fb14ed54d4ed979ab49f9ae2de5"
+    },
+    "dictionaries": {
+      "8105.dict.yaml": "1f9a42b91dea6982baee2551981780271aeffd78876662b9c9f324e56b37b120",
+      "base.dict.yaml": "0418d5103d8e40c8fff4b686a873ad03e9836cd0419ecae0b7e1e2526312dba0",
+      "ext.dict.yaml": "7d2fd8886c099119c651a9306c2f61f07a8967e4f785587b84da45affdd71a54"
+    },
+    "trainable_cases": 298,
+    "excluded_from_loss": {
+      "gold_outside_shortlist": 14
+    },
+    "optimizer_steps": 225,
+    "additional_parameter_or_coefficient_search": false
+  },
+  "selection": {
+    "training_cli": {
+      "data": "novel-dev.jsonl",
+      "criterion": "Maximize related-group-equal top1 across epoch0..3; ties choose earliest epoch.",
+      "selected_epoch": 0,
+      "selected_group_top1_fraction": [
+        3,
+        4
+      ]
+    },
+    "external_final": {
+      "data": "mixed-dev.jsonl",
+      "criterion": "Include epoch0..3. After train CLI completes, use the already fixed combined-dev94 through actual CLI; maximize equal-connected/input-group top1, then earliest epoch. Raw train CLI selection on novel-only dev remains in its own output and is not silently rewritten.",
+      "selected_epoch": 3,
+      "selected_model_sha256": "26b00f6376fd9dbc7b834678175406f3c4260b84a5a455b6b2050122c573fa7e",
+      "parent_epoch0_rows_identical": true,
+      "epochs": [
+        {
+          "epoch": 0,
+          "group_top1_fraction": [
+            149,
+            180
+          ],
+          "metrics": {
+            "breakages": 1,
+            "n": 94,
+            "recall": 92,
+            "rescues": 22,
+            "static_top1": 52,
+            "static_top5": 91,
+            "top1": 73,
+            "top5": 92
+          },
+          "model_sha256": "a955041314af334270ae35c662d0ada97fe4750866b50ff08b4377e55f964b2f"
+        },
+        {
+          "epoch": 1,
+          "group_top1_fraction": [
+            437,
+            540
+          ],
+          "metrics": {
+            "breakages": 2,
+            "n": 94,
+            "recall": 92,
+            "rescues": 23,
+            "static_top1": 52,
+            "static_top5": 91,
+            "top1": 73,
+            "top5": 92
+          },
+          "model_sha256": "f3451ae70144803459a4b36cece0b6a34677abc879b96145a91ace7e472f977b"
+        },
+        {
+          "epoch": 2,
+          "group_top1_fraction": [
+            451,
+            540
+          ],
+          "metrics": {
+            "breakages": 2,
+            "n": 94,
+            "recall": 92,
+            "rescues": 26,
+            "static_top1": 52,
+            "static_top5": 91,
+            "top1": 76,
+            "top5": 92
+          },
+          "model_sha256": "488821967f1dcc55b1a23db67779e6f7189f41f8dae10132c40a4a7350f1203b"
+        },
+        {
+          "epoch": 3,
+          "group_top1_fraction": [
+            467,
+            540
+          ],
+          "metrics": {
+            "breakages": 2,
+            "n": 94,
+            "recall": 92,
+            "rescues": 27,
+            "static_top1": 52,
+            "static_top5": 91,
+            "top1": 77,
+            "top5": 92
+          },
+          "model_sha256": "26b00f6376fd9dbc7b834678175406f3c4260b84a5a455b6b2050122c573fa7e"
+        }
+      ]
+    }
+  },
+  "reproduction": {
+    "entrypoint": "data/training/yanliu-25m-v1/reproduce.py",
+    "scope": "Repeat the frozen data, window derivation, optimization and both selection stages using the current source tree.",
+    "byte_identical_release_guaranteed": false,
+    "reason": "Historical recipe SHA binds absolute paths, full source hashes and the binary; it is embedded in weights. New source/build/paths and safetensors header ordering may change output bytes. Do not force epoch3 or rewrite the training-CLI epoch0 selection.",
+    "data_and_recipe_license": "GPL-3.0-or-later",
+    "weights_and_yanliu_finetuning_license": "Apache-2.0"
+  }
+}

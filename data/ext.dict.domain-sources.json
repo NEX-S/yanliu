@@ -1,0 +1,177 @@
+{
+  "reviewed_training_headwords": 50,
+  "added": 13,
+  "weight": 100,
+  "selection": "semantic/readings review of public split=train primary raw headings; no full-input non-Completion old Decoder recall; no evalgold sampling",
+  "entries": [
+    {
+      "term": "内联汇编插桩",
+      "pinyin": "nei lian hui bian cha zhuang",
+      "source": {
+        "heading": "内联汇编插桩",
+        "url": "https://github.com/torvalds/linux/blob/24a19b953e2a3d0ea5a8c4951a0ab8f32720c907/Documentation/translations/zh_CN/dev-tools/kmsan.rst",
+        "sha256": "fbf58f1d95eebb51c2fc8add22698ddd9c9c1ee05ff0134cd69cebac34560598",
+        "bucket": "kernel"
+      },
+      "old_full_recall": false
+    },
+    {
+      "term": "闭散列法",
+      "pinyin": "bi san lie fa",
+      "source": {
+        "heading": "闭散列法",
+        "url": "https://github.com/OI-wiki/OI-wiki/blob/4e8b348eda24e3a28830fad46bf8c6b0674a8c48/docs/ds/hash.md",
+        "sha256": "dd1d134be104ea99129f342d8758a7e545231ab37f82e3411a2fecc07063614a",
+        "bucket": "oiwiki"
+      },
+      "old_full_recall": false
+    },
+    {
+      "term": "主定理",
+      "pinyin": "zhu ding li",
+      "source": {
+        "heading": "主定理",
+        "url": "https://github.com/OI-wiki/OI-wiki/blob/4e8b348eda24e3a28830fad46bf8c6b0674a8c48/docs/basic/complexity.md",
+        "sha256": "d3b9b3579eb5dcabadf64178beb8311a6ab68b1e1805780340f7eadfdbb63561",
+        "bucket": "oiwiki"
+      },
+      "old_full_recall": false
+    },
+    {
+      "term": "萨维奇定理",
+      "pinyin": "sa wei qi ding li",
+      "source": {
+        "heading": "萨维奇定理",
+        "url": "https://github.com/OI-wiki/OI-wiki/blob/4e8b348eda24e3a28830fad46bf8c6b0674a8c48/docs/misc/cc-basic.md",
+        "sha256": "59705458b0bb678041bea0ac6c620ee4a1367a81eddf64a09430097d0de837c8",
+        "bucket": "oiwiki"
+      },
+      "old_full_recall": false
+    },
+    {
+      "term": "闵可夫斯基和",
+      "pinyin": "min ke fu si ji he",
+      "source": {
+        "heading": "闵可夫斯基和",
+        "url": "https://github.com/OI-wiki/OI-wiki/blob/4e8b348eda24e3a28830fad46bf8c6b0674a8c48/docs/geometry/convex-hull.md",
+        "sha256": "d774c3e96d1fddb8be9ea65dd5a0a222ae121cf0fb36e28f90005e07f5a36653",
+        "bucket": "oiwiki"
+      },
+      "old_full_recall": false
+    },
+    {
+      "term": "加性注意力",
+      "pinyin": "jia xing zhu yi li",
+      "source": {
+        "heading": "[**加性注意力**]",
+        "url": "https://github.com/d2l-ai/d2l-zh/blob/e6b18ccea71451a55fcd861d7b96fddf2587b09a/chapter_attention-mechanisms/attention-scoring-functions.md",
+        "sha256": "7c864b6d8c42d6d512beadc3cd74eead80eac19e37a5ef9adadea350ae6e1f64",
+        "bucket": "d2l"
+      },
+      "old_full_recall": false
+    },
+    {
+      "term": "协变量偏移",
+      "pinyin": "xie bian liang pian yi",
+      "source": {
+        "heading": "协变量偏移",
+        "url": "https://github.com/d2l-ai/d2l-zh/blob/e6b18ccea71451a55fcd861d7b96fddf2587b09a/chapter_multilayer-perceptrons/environment.md",
+        "sha256": "62fef52e452c7d33ae90b31cac94658f925d676fc701e42ac3df02ff4cf61473",
+        "bucket": "d2l"
+      },
+      "old_full_recall": false
+    },
+    {
+      "term": "候选记忆元",
+      "pinyin": "hou xuan ji yi yuan",
+      "source": {
+        "heading": "候选记忆元",
+        "url": "https://github.com/d2l-ai/d2l-zh/blob/e6b18ccea71451a55fcd861d7b96fddf2587b09a/chapter_recurrent-modern/lstm.md",
+        "sha256": "4d966a7709b6444515d08480bd7da71f6712d94cc13b8b0319c3115599f44add",
+        "bucket": "d2l"
+      },
+      "old_full_recall": false
+    },
+    {
+      "term": "门控记忆元",
+      "pinyin": "men kong ji yi yuan",
+      "source": {
+        "heading": "门控记忆元",
+        "url": "https://github.com/d2l-ai/d2l-zh/blob/e6b18ccea71451a55fcd861d7b96fddf2587b09a/chapter_recurrent-modern/lstm.md",
+        "sha256": "4d966a7709b6444515d08480bd7da71f6712d94cc13b8b0319c3115599f44add",
+        "bucket": "d2l"
+      },
+      "old_full_recall": false
+    },
+    {
+      "term": "全变分损失",
+      "pinyin": "quan bian fen sun shi",
+      "source": {
+        "heading": "全变分损失",
+        "url": "https://github.com/d2l-ai/d2l-zh/blob/e6b18ccea71451a55fcd861d7b96fddf2587b09a/chapter_computer-vision/neural-style.md",
+        "sha256": "4b9a894c3d421e0eacd01cc81504d8c2fd00949ab997fa99d54f6645568c9003",
+        "bucket": "d2l"
+      },
+      "old_full_recall": false
+    },
+    {
+      "term": "转置卷积",
+      "pinyin": "zhuan zhi juan ji",
+      "source": {
+        "heading": "转置卷积",
+        "url": "https://github.com/d2l-ai/d2l-zh/blob/e6b18ccea71451a55fcd861d7b96fddf2587b09a/chapter_computer-vision/transposed-conv.md",
+        "sha256": "c657b09bdba88f3b2b0b11ad94c40e1fb42c4d4b72ea076a3039f4186fdca43f",
+        "bucket": "d2l"
+      },
+      "old_full_recall": false
+    },
+    {
+      "term": "子词嵌入",
+      "pinyin": "zi ci qian ru",
+      "source": {
+        "heading": "子词嵌入",
+        "url": "https://github.com/d2l-ai/d2l-zh/blob/e6b18ccea71451a55fcd861d7b96fddf2587b09a/chapter_natural-language-processing-pretraining/subword-embedding.md",
+        "sha256": "cd757f52bd4c141d60b2506a551c7b0f8882dd1a8f661427a6c1f6f9462c0815",
+        "license": "CC BY-SA 4.0; code Apache-2.0",
+        "bucket": "d2l",
+        "group_id": "df6890aa0150d1f598019c621cb6afbb1b88af75f2376994f208710590bda0be",
+        "split": "train",
+        "private": false
+      },
+      "old_full_recall": false,
+      "manual_reading_review": "嵌入的嵌读qian，不选kan",
+      "audit": "results/technical-terms-v2/before-results.json"
+    },
+    {
+      "term": "并发原语",
+      "pinyin": "bing fa yuan yu",
+      "source": {
+        "heading": "并发原语",
+        "url": "https://github.com/torvalds/linux/blob/24a19b953e2a3d0ea5a8c4951a0ab8f32720c907/Documentation/translations/zh_CN/core-api/index.rst",
+        "sha256": "95d651ca16d4e40e75073de48d37e13529c339b079b74cd1716d76c726817215",
+        "license": "GPL-2.0; per-file SPDX",
+        "bucket": "kernel",
+        "group_id": "75529a5ceb279c7bbebe5f4beacdd91c0f70b03a9f98d5605b546f388c76fb04",
+        "split": "train",
+        "private": false
+      },
+      "old_full_recall": false,
+      "manual_reading_review": "并发的发读fa，原语读yuan yu",
+      "audit": "results/technical-terms-v2/before-results.json"
+    }
+  ],
+  "source_licenses": {
+    "kernel": "GPL-2.0; per-file SPDX in pinned Linux document",
+    "oiwiki": "CC BY-SA 4.0 prose",
+    "d2l": "CC BY-SA 4.0 prose"
+  },
+  "additional_audit": {
+    "reviewed_new_public_train_titles": 10,
+    "added": 2,
+    "already_full_recalled": 8,
+    "weight": 100,
+    "source_split_binding": "results/technical-terms-v2/public-split-binding.json",
+    "acceptance": "50 complete title denominator; full consumed original bytes and source != Completion, including Composed",
+    "readings_review": "manual Chinese term readings; no DEV/test/private gold selection"
+  }
+}

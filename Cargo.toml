@@ -1,0 +1,33 @@
+[package]
+name = "yanliu"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.98"
+license = "GPL-3.0-or-later"
+description = "A local Chinese input method for GNOME"
+
+[features]
+default = []
+ibus = ["dep:zbus", "dep:tokio"]
+accelerator = ["dep:openvino", "dep:openvino-sys", "dep:sha2", "dep:libloading"]
+
+[dependencies]
+chinese-ime-lm = { path = "vendor/chinese-ime-lm" }
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+openvino = { version = "=0.11.1", optional = true, features = ["runtime-linking"] }
+openvino-sys = { version = "=0.11.1", optional = true, features = ["runtime-linking"] }
+sha2 = { version = "0.10", optional = true }
+libloading = { version = "0.8", optional = true }
+zbus = { version = "5.19", optional = true, default-features = false, features = ["tokio"] }
+tokio = { version = "1", optional = true, features = ["rt-multi-thread", "macros", "sync", "signal", "time"] }
+
+[[bin]]
+name = "yanliu"
+path = "src/bin/yanliu.rs"
+
+[[bin]]
+name = "yanliu-ibus"
+path = "src/bin/yanliu-ibus.rs"
+required-features = ["ibus"]

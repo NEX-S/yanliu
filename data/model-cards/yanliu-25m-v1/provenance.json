@@ -1,0 +1,112 @@
+{
+  "format": "yanliu-public-model-v1",
+  "name": "yanliu-25m-v1",
+  "license": "Apache-2.0",
+  "files": {
+    "sentence-model.safetensors": {
+      "sha256": "26b00f6376fd9dbc7b834678175406f3c4260b84a5a455b6b2050122c573fa7e",
+      "size": 25365832
+    },
+    "sentence-model.xml": {
+      "sha256": "478fb68cbdcda30e296d89738a9a88e9afe28f5dd77ecf2ef4046e9ef9609d6b",
+      "size": 231852
+    },
+    "sentence-model.bin": {
+      "sha256": "e2b56f4c73c54f24db7bc18d1d864bec661b3e985562cb7ac573510c5f89ea58",
+      "size": 99395256
+    },
+    "sentence-model.openvino.json": {
+      "sha256": "d49c2febd1d538097ad14840fcd0bc229dcd889111dd296836108ef59bec16ff",
+      "size": 135889
+    }
+  },
+  "upstream": {
+    "source": "metasequoiaime/pinyin-ime-reranker-25M",
+    "url": "https://huggingface.co/metasequoiaime/pinyin-ime-reranker-25M/resolve/75295b373a7ef0d14e9bebd32c1625c9cfcfea49/sentence-model.safetensors",
+    "revision": "75295b373a7ef0d14e9bebd32c1625c9cfcfea49",
+    "license": "Apache-2.0",
+    "sha256": "0a6ecba69bf1d39c7eb49549c716477dd6c03fdf05757773e1f50435262fb469",
+    "size": 25480184,
+    "receipts": {
+      "LICENSE": {
+        "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+        "url": "https://huggingface.co/metasequoiaime/pinyin-ime-reranker-25M/raw/75295b373a7ef0d14e9bebd32c1625c9cfcfea49/LICENSE"
+      },
+      "NOTICE": {
+        "sha256": "b9489e8c8e3a271bf23131a57a7323264847d57561d36fc135101bf1eefd32f2",
+        "url": "https://huggingface.co/metasequoiaime/pinyin-ime-reranker-25M/raw/75295b373a7ef0d14e9bebd32c1625c9cfcfea49/NOTICE"
+      },
+      "model-card.md": {
+        "sha256": "854c94ddc4dd22410a7f494166dc734d2ad53cf69339a6966159ae209c798ba3",
+        "url": "https://huggingface.co/metasequoiaime/pinyin-ime-reranker-25M/raw/75295b373a7ef0d14e9bebd32c1625c9cfcfea49/README.md"
+      }
+    },
+    "historical_asset_freeze_sha256": "6a6ada9470d8df205548679c81bc11628ca28db0d304cefd7e269fcdac2fae66"
+  },
+  "context64_parent": {
+    "sha256": "4d4bc10ee9e1d0ca82f2bad3a0ee7c7ba598dc1fcb0dc79ef267914a40473448",
+    "changes": "Only config.context128→64 and pos.weight first64 rows; all132 other tensor bytes unchanged. No training or requantization in this stage."
+  },
+  "supervised_finetuning": {
+    "date": "2026-10-19",
+    "public_recipe": "data/training/yanliu-25m-v1/recipe.json",
+    "public_recipe_url": "https://github.com/NEX-S/yanliu/blob/v0.1.0/data/training/yanliu-25m-v1/recipe.json",
+    "public_recipe_sha256": "502bacebf1a7809fd78ffc4d25e394af0811189a2c36f49cfeea9929e56692aa",
+    "historical_recipe_sha256": "a82fb2627bb344d86699f089f4917fba749e27f2641162e46a1210ea22a63920",
+    "historical_train_script_sha256": "44c5be03d9b15d201eefa0549e202bb0581babac70395989a3aab276cb13297e",
+    "historical_cli_binary_sha256": "ff51ff95d97f7e01c4102824efa5f706dbfd885a7c15a523847c141c48e7e226",
+    "data": {
+      "train.jsonl": {
+        "sha256": "dc131452a7901b1738d8c2d2fe2b2bd96f94d88920deb05a4211d824ee7c15bf",
+        "size": 92269,
+        "cases": 312,
+        "groups": 78
+      },
+      "novel-dev.jsonl": {
+        "sha256": "56e62b7965f7a56576e6f5e701c3e3aa394a09b8f56b229fe4d8ea663c11bf9e",
+        "size": 10823,
+        "cases": 44,
+        "groups": 11
+      },
+      "mixed-dev.jsonl": {
+        "sha256": "1a944092c415c5a549d235befa7ba84ae7b0867d5f7470957e3a052b97d0e86e",
+        "size": 27068,
+        "cases": 94,
+        "groups": 45
+      }
+    },
+    "trainable_cases": 298,
+    "optimizer_steps": 225,
+    "epochs": 3,
+    "selected_epoch": 3,
+    "training_cli_novel44_selected_epoch": 0,
+    "selection": "Separate predeclared mixed94 development selection maximizes equal-group top1 across epoch0..3, ties earliest. Observed DEV only; known132 is training fit.",
+    "private_data_used": false,
+    "historical_selection_sha256": "c0f13ec694133fea8e3064fdf9f96a426c74e9eab2b559d2e4cdffc071cb570c"
+  },
+  "export": {
+    "script_sha256": "c94be238ae39e3d0a72561f8e5fa3ca62093fa11c6b99379ea28fd7f18828752",
+    "source_sha256": "26b00f6376fd9dbc7b834678175406f3c4260b84a5a455b6b2050122c573fa7e",
+    "xml_sha256": "478fb68cbdcda30e296d89738a9a88e9afe28f5dd77ecf2ef4046e9ef9609d6b",
+    "bin_sha256": "e2b56f4c73c54f24db7bc18d1d864bec661b3e985562cb7ac573510c5f89ea58",
+    "metadata_sha256": "d49c2febd1d538097ad14840fcd0bc229dcd889111dd296836108ef59bec16ff",
+    "openvino_version": "2026.0.0-20965-c6d6a13a886-releases/2026/0",
+    "format": "yanliu-ranker-ir-v1",
+    "batch": 9
+  },
+  "reproduction": {
+    "entrypoint": "data/training/yanliu-25m-v1/reproduce.py",
+    "scope": "Repeat the frozen data, window derivation, optimization and both selection stages using the current source tree.",
+    "byte_identical_release_guaranteed": false,
+    "reason": "Historical recipe SHA binds absolute paths, full source hashes and the binary; it is embedded in weights. New source/build/paths and safetensors header ordering may change output bytes. Do not force epoch3 or rewrite the training-CLI epoch0 selection.",
+    "data_and_recipe_license": "GPL-3.0-or-later",
+    "weights_and_yanliu_finetuning_license": "Apache-2.0"
+  },
+  "notices": {
+    "license_file": "LICENSE",
+    "notice_file": "NOTICE",
+    "upstream_notice_sha256": "b9489e8c8e3a271bf23131a57a7323264847d57561d36fc135101bf1eefd32f2",
+    "attribution": "Trained on the Chinese portion of C4 (ODC-BY, https://huggingface.co/datasets/allenai/c4) and LCCC (MIT, https://github.com/thu-coai/CDial-GPT).",
+    "yanliu_modifications_license": "Apache-2.0"
+  }
+}

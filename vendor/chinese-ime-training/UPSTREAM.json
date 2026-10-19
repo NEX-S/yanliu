@@ -1,0 +1,16 @@
+{
+  "repository": "https://github.com/metasequoiaime/chinese-ime-lm",
+  "revision": "ed030178ebf7f361a08b57c6b179d512ea47042f",
+  "license": "GPL-3.0",
+  "original_sha256": {
+    "LICENSE": "8b1ba204bb69a0ade2bfcf65ef294a920f6bb361b317dba43c7ef29d96332b9b",
+    "NOTICE": "b9489e8c8e3a271bf23131a57a7323264847d57561d36fc135101bf1eefd32f2",
+    "neural/model.py": "0b7fb41aa8a4356fa7757aa1b9e84d5022fa33a5436e695dcc1116b0d34c1f9b"
+  },
+  "local_changes": {
+    "neural/initialize.py": "local file, not upstream: strict loader of a chinese-ime-lm safetensors artifact into the unchanged neural/model.py with a tied head, used by scripts/export_ranker.py"
+  },
+  "local_sha256": {
+    "neural/initialize.py": "160af2dc697660b74ab74031283f768c9ec26fb14ed54d4ed979ab49f9ae2de5"
+  }
+}

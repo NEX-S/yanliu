@@ -1,0 +1,52 @@
+name: CI
+
+on: [push, pull_request]
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install protocol test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ibus python3-gi gir1.2-ibus-1.0 python3-venv
+
+      - name: Fetch and verify fixed assets
+        run: |
+          python3 scripts/fetch_assets.py
+          python3 scripts/fetch_assets.py --verify-only
+
+      - name: Check Rust
+        run: |
+          cargo fmt --check
+          cargo clippy --locked --all-targets --features ibus,accelerator -- -D warnings
+          cargo test --locked --all-targets --features ibus,accelerator
+          cargo test --locked --lib --features ibus real_dictionary -- --ignored --nocapture
+
+      - name: Build the service under test
+        run: cargo build --locked --release --features ibus,accelerator --bins
+
+      - name: Check CLI, panel helpers and packaging
+        env:
+          YANLIU_BIN: ${{ github.workspace }}/target/release/yanliu
+        run: |
+          /usr/bin/python3 -m unittest discover -s tests -p 'test_*cli.py'
+          /usr/bin/python3 -m unittest discover -s tests -p test_ibus_panel.py
+          /usr/bin/python3 tests/ibus_packaging.py
+
+      - name: Check private IBus protocol
+        run: /usr/bin/python3 scripts/test_ibus.py target/release/yanliu-ibus
+
+      - name: Check offline teacher and training data tools
+        run: |
+          python3 -m venv .cache/ime-lab
+          .cache/ime-lab/bin/python -m pip install -r scripts/ime-lab-requirements.txt
+          .cache/ime-lab/bin/python -m unittest discover -s tests -p test_ime_lab.py
+          .cache/ime-lab/bin/python -m unittest discover -s tests -p test_train_ranker.py

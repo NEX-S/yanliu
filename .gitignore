@@ -1,0 +1,9 @@
+/target/
+/.cache/
+/data/dictionaries/
+/data/models/
+/data/cache/
+/data/runtime/
+/results/
+__pycache__/
+vendor/*/target/

@@ -1,0 +1,126 @@
+{
+  "schema_version": 1,
+  "assets": [
+    {
+      "path": "data/dictionaries/8105.dict.yaml",
+      "url": "https://raw.githubusercontent.com/iDvel/rime-ice/da1fbe602e38f26db846fa10120ee64c2b0324c0/cn_dicts/8105.dict.yaml",
+      "source": "iDvel/rime-ice",
+      "revision": "da1fbe602e38f26db846fa10120ee64c2b0324c0",
+      "license": "GPL-3.0",
+      "sha256": "1f9a42b91dea6982baee2551981780271aeffd78876662b9c9f324e56b37b120",
+      "size": 115728
+    },
+    {
+      "path": "data/dictionaries/base.dict.yaml",
+      "url": "https://raw.githubusercontent.com/iDvel/rime-ice/da1fbe602e38f26db846fa10120ee64c2b0324c0/cn_dicts/base.dict.yaml",
+      "source": "iDvel/rime-ice",
+      "revision": "da1fbe602e38f26db846fa10120ee64c2b0324c0",
+      "license": "GPL-3.0",
+      "sha256": "0418d5103d8e40c8fff4b686a873ad03e9836cd0419ecae0b7e1e2526312dba0",
+      "size": 16602296
+    },
+    {
+      "path": "data/dictionaries/ext.dict.yaml",
+      "url": "https://raw.githubusercontent.com/iDvel/rime-ice/da1fbe602e38f26db846fa10120ee64c2b0324c0/cn_dicts/ext.dict.yaml",
+      "source": "iDvel/rime-ice",
+      "revision": "da1fbe602e38f26db846fa10120ee64c2b0324c0",
+      "license": "GPL-3.0",
+      "sha256": "8e49a0294c0139e63c815cc33a2d438cc144eb7889297d30cec899a368697c06",
+      "size": 11922913,
+      "effective_sha256": "7d2fd8886c099119c651a9306c2f61f07a8967e4f785587b84da45affdd71a54",
+      "effective_size": 11924611,
+      "local_patch": {
+        "path": "data/ext.dict.local.patch",
+        "sha256": "ea3193f58f12135254f242df5217124a59043d5e8c35e85509c1bd9bcc9e1451"
+      },
+      "note": "Local appendix of computer, Linux and science headwords, not upstream rime-ice; upstream bytes are verified before the patch is applied. Public-source headword provenance: data/ext.dict.domain-sources.json."
+    },
+    {
+      "path": "data/dictionaries/LICENSE",
+      "url": "https://raw.githubusercontent.com/iDvel/rime-ice/da1fbe602e38f26db846fa10120ee64c2b0324c0/LICENSE",
+      "source": "iDvel/rime-ice",
+      "revision": "da1fbe602e38f26db846fa10120ee64c2b0324c0",
+      "license": "GPL-3.0",
+      "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+      "size": 35149
+    },
+    {
+      "path": "vendor/chinese-ime-lm/Cargo.toml",
+      "url": "https://raw.githubusercontent.com/metasequoiaime/chinese-ime-lm/ed030178ebf7f361a08b57c6b179d512ea47042f/reference/Cargo.toml",
+      "source": "metasequoiaime/chinese-ime-lm/reference",
+      "revision": "ed030178ebf7f361a08b57c6b179d512ea47042f",
+      "license": "Apache-2.0",
+      "sha256": "dde076644899cb13c13a7d39d6197020dd28888bbcd070b292fef6ee871aac5b",
+      "size": 1150
+    },
+    {
+      "path": "vendor/chinese-ime-lm/LICENSE",
+      "url": "https://raw.githubusercontent.com/metasequoiaime/chinese-ime-lm/ed030178ebf7f361a08b57c6b179d512ea47042f/reference/LICENSE",
+      "source": "metasequoiaime/chinese-ime-lm/reference",
+      "revision": "ed030178ebf7f361a08b57c6b179d512ea47042f",
+      "license": "Apache-2.0",
+      "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+      "size": 11358
+    },
+    {
+      "path": "vendor/chinese-ime-lm/src/lib.rs",
+      "url": "https://raw.githubusercontent.com/metasequoiaime/chinese-ime-lm/ed030178ebf7f361a08b57c6b179d512ea47042f/reference/src/lib.rs",
+      "source": "metasequoiaime/chinese-ime-lm/reference",
+      "revision": "ed030178ebf7f361a08b57c6b179d512ea47042f",
+      "license": "Apache-2.0",
+      "sha256": "826099e3b0b96a8a4d95a9705b9eba024dee17e2f7179fea2f495c0a5a7df1c8",
+      "size": 48330,
+      "effective_sha256": "b6cd88ea19107f5f84773cee0663aee063657ebc1d754d137665ebdb815f344d",
+      "effective_size": 48823,
+      "local_patch": {
+        "path": "vendor/chinese-ime-lm/yanliu.patch",
+        "sha256": "c659b6f75ebb8a21a9265ab34d5c1612693efd066613e1eeb6fc730fb663e703"
+      }
+    },
+    {
+      "path": "vendor/chinese-ime-lm/src/weights.rs",
+      "url": "https://raw.githubusercontent.com/metasequoiaime/chinese-ime-lm/ed030178ebf7f361a08b57c6b179d512ea47042f/reference/src/weights.rs",
+      "source": "metasequoiaime/chinese-ime-lm/reference",
+      "revision": "ed030178ebf7f361a08b57c6b179d512ea47042f",
+      "license": "Apache-2.0",
+      "sha256": "caf8b5e3ee988bbec2478e034243608719cc29fcbe398499d00d454943f40109",
+      "size": 9133
+    },
+    {
+      "path": "data/models/sentence-model.safetensors",
+      "url": "https://github.com/metasequoiaime/chinese-ime-lm/releases/download/model-v1/sentence-model.safetensors",
+      "source": "metasequoiaime/chinese-ime-lm GitHub release asset 572758937",
+      "revision": "model-v1:asset-572758937",
+      "license": "Apache-2.0",
+      "sha256": "86ac529510cb3b4968a5e6ade83ec8080f5b34a0a681e75c362accbbd387d1c1",
+      "size": 4486280
+    },
+    {
+      "path": "vendor/chinese-ime-training/LICENSE",
+      "url": "https://raw.githubusercontent.com/metasequoiaime/chinese-ime-lm/ed030178ebf7f361a08b57c6b179d512ea47042f/LICENSE",
+      "source": "metasequoiaime/chinese-ime-lm",
+      "revision": "ed030178ebf7f361a08b57c6b179d512ea47042f",
+      "license": "GPL-3.0",
+      "sha256": "8b1ba204bb69a0ade2bfcf65ef294a920f6bb361b317dba43c7ef29d96332b9b",
+      "size": 35148
+    },
+    {
+      "path": "vendor/chinese-ime-training/NOTICE",
+      "url": "https://raw.githubusercontent.com/metasequoiaime/chinese-ime-lm/ed030178ebf7f361a08b57c6b179d512ea47042f/NOTICE",
+      "source": "metasequoiaime/chinese-ime-lm",
+      "revision": "ed030178ebf7f361a08b57c6b179d512ea47042f",
+      "license": "GPL-3.0",
+      "sha256": "b9489e8c8e3a271bf23131a57a7323264847d57561d36fc135101bf1eefd32f2",
+      "size": 1525
+    },
+    {
+      "path": "vendor/chinese-ime-training/neural/model.py",
+      "url": "https://raw.githubusercontent.com/metasequoiaime/chinese-ime-lm/ed030178ebf7f361a08b57c6b179d512ea47042f/neural/model.py",
+      "source": "metasequoiaime/chinese-ime-lm",
+      "revision": "ed030178ebf7f361a08b57c6b179d512ea47042f",
+      "license": "GPL-3.0",
+      "sha256": "0b7fb41aa8a4356fa7757aa1b9e84d5022fa33a5436e695dcc1116b0d34c1f9b",
+      "size": 4393
+    }
+  ]
+}

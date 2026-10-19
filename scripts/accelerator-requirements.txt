@@ -1,0 +1,6 @@
+# CPU-only model export; native GPU/NPU runtime is prepared separately.
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.14.1+cpu
+safetensors==0.8.0
+numpy==2.4.6
+openvino==2026.0.0

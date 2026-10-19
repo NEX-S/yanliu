@@ -1,0 +1,51 @@
+--- ext.dict.yaml
++++ ext.dict.yaml
+@@ -339209,3 +339209,48 @@
+ 做做做	zuo zuo zuo	100
+ 嘬嘬嘬	zuo zuo zuo	100
+ 坐坐坐	zuo zuo zuo	100
++# 本地计算机、Linux 与科学词头。开发评测里已能完整打出的不重复收录。
++# 缺词来自本机 Codex、Claude、Grok 记录，拼音按 8105 读音闭合，权重 100。
++# 这些行不是上游 rime-ice；对话原文不入库。
++重物化	chong wu hua	100
++纯虚	chun xu	100
++单态	dan tai	100
++单态化	dan tai hua	100
++低通	di tong	100
++堆溢出	dui yi chu	100
++键向量	jian xiang liang	100
++交叉熵	jiao cha shang	100
++静默期	jing mo qi	100
++侵入式	qin ru shi	100
++熵解码	shang jie ma	100
++填充符	tian chong fu	100
++透明大页	tou ming da ye	100
++尾调用	wei diao yong	100
++页偏移	ye pian yi	100
++异常值	yi chang zhi	100
++依赖树	yi lai shu	100
++硬链接数	ying lian jie shu	100
++原子性	yuan zi xing	100
++预链接	yu lian jie	100
++栈回溯	zhan hui su	100
++栈金丝雀	zhan jin si que	100
++帧内	zhen nei	100
++帧指针	zhen zhi zhen	100
++驻留集	zhu liu ji	100
++逐张量	zhu zhang liang	100
++组帧	zu zhen	100
++# 本轮新增仅源于冻结public/train一手词头；旧Decoder无完整召回。来源见 ext.dict.domain-sources.json。
++内联汇编插桩	nei lian hui bian cha zhuang	100
++闭散列法	bi san lie fa	100
++主定理	zhu ding li	100
++萨维奇定理	sa wei qi ding li	100
++闵可夫斯基和	min ke fu si ji he	100
++加性注意力	jia xing zhu yi li	100
++协变量偏移	xie bian liang pian yi	100
++候选记忆元	hou xuan ji yi yuan	100
++门控记忆元	men kong ji yi yuan	100
++全变分损失	quan bian fen sun shi	100
++转置卷积	zhuan zhi juan ji	100
++# 公开训练词头第二次窄审计：仅补真实完整召回缺失项，来源见 ext.dict.domain-sources.json。
++子词嵌入	zi ci qian ru	100
++并发原语	bing fa yuan yu	100
