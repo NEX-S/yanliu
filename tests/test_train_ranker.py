@@ -31,7 +31,7 @@ def report(rows):
 
 class TrainingDataTests(unittest.TestCase):
     def test_nonobject_case_reports_input_path_and_line(self):
-        with tempfile.TemporaryDirectory(prefix="train-ranker-data-", dir=ROOT / ".cache") as directory:
+        with tempfile.TemporaryDirectory(prefix="train-ranker-data-") as directory:
             path = Path(directory) / "cases.jsonl"
             for value in [[], None, 7]:
                 path.write_text(json.dumps(value) + "\n")
@@ -41,7 +41,7 @@ class TrainingDataTests(unittest.TestCase):
                 self.assertIn("JSON object", str(error.exception))
 
     def test_case_ids_and_target_fields_match_cli_input(self):
-        with tempfile.TemporaryDirectory(prefix="train-ranker-fields-", dir=ROOT / ".cache") as directory:
+        with tempfile.TemporaryDirectory(prefix="train-ranker-fields-") as directory:
             path = Path(directory) / "cases.jsonl"
             base = {"input": "ni", "gold": "你"}
             path.write_text(json.dumps(base) + "\n" + json.dumps(dict(base, id="")) + "\n")
@@ -150,7 +150,7 @@ class TrainingTensorTests(unittest.TestCase):
         model = torch.nn.Linear(2, 2)
         metadata = {"format": "chinese-ime-lm", "license": "GPL-3.0-or-later",
                     "attribution": "public fixture"}
-        with tempfile.TemporaryDirectory(prefix="train-ranker-test-", dir=ROOT / ".cache") as directory:
+        with tempfile.TemporaryDirectory(prefix="train-ranker-test-") as directory:
             artifacts = TRAIN.export_model(model, metadata, "parent", "recipe", Path(directory),
                                            0, 0, torch, save_file)
             for precision in ["f32", "int8"]:
