@@ -73,6 +73,8 @@ class ImeLabTests(unittest.TestCase):
                 self.assertEqual(len(evaluated), checked)
                 self.assertEqual(summary["buckets"], {"all": {"n": checked}} if checked else {})
                 self.assertEqual(len(requests), 3)
+                for record in summary["rounds"]:
+                    self.assertEqual(json.loads((output / f"round-{record['round']:03d}.json").read_text()), record)
                 for request in requests:
                     self.assertEqual(request.full_url, "https://gateway.example/openai/chat/completions")
                     self.assertIsNone(request.get_header("Authorization"))
@@ -91,6 +93,41 @@ class ImeLabTests(unittest.TestCase):
                 for path in output.iterdir():
                     for secret in SECRETS.values():
                         self.assertNotIn(secret.encode(), path.read_bytes())
+
+    def test_later_http_failure_preserves_completed_round_cases_and_rejections(self):
+        with tempfile.TemporaryDirectory(prefix="yanliu-ime-lab-checkpoint-") as directory:
+            root = Path(directory)
+            (root / "data/dictionaries").mkdir(parents=True)
+            fixture, output = root / "fixture", root / "evidence"
+            fixture.write_bytes(b"bound binary and model; not executed")
+            response = completion(json.dumps({"cases": [case(), case(gold="模型A")]}))
+            error = urllib.error.HTTPError("https://gateway.example/openai/chat/completions", 503,
+                                           "fixture unavailable", {}, io.BytesIO(b"fixture unavailable"))
+            argv = ["ime_lab.py", "--output-dir", str(output), "--binary", str(fixture), "--model", str(fixture),
+                    "--endpoint", "https://gateway.example/openai", "--rounds", "2"]
+            with (patch.object(lab, "ROOT", root), patch.object(lab.sys, "argv", argv),
+                  patch.object(lab.urllib.request, "urlopen",
+                               side_effect=[io.BytesIO(json.dumps(response).encode()), error]) as gateway,
+                  patch.object(lab.subprocess, "run") as cli, redirect_stdout(io.StringIO())):
+                with self.assertRaises(urllib.error.HTTPError) as raised:
+                    lab.main()
+            self.assertIs(raised.exception, error)
+            self.assertEqual(gateway.call_count, 2)
+            cli.assert_not_called()
+            rows = [json.loads(line) for line in (output / "cases.jsonl").read_text(encoding="utf-8").splitlines()]
+            self.assertEqual(rows, [{"id": rows[0]["id"], "input": "paixumoxing", **case()}])
+            record = json.loads((output / "round-001.json").read_text(encoding="utf-8"))
+            self.assertEqual(record, {
+                "round": 1, "response_sha256": lab.sha256(output / "round-001-response.body"), "generated": 2,
+                "accepted": [rows[0]["id"]],
+                "rejected": [{"index": 2, "reason": "gold_chinese_or_length", "case": case(gold="模型A")}],
+            })
+            self.assertEqual(json.loads((output / "round-001-response.body").read_text()), response)
+            self.assertTrue((output / "round-001-request.json").exists())
+            self.assertTrue((output / "round-002-request.json").exists())
+            self.assertFalse((output / "round-002.json").exists())
+            self.assertFalse((output / "summary.json").exists())
+            self.assertFalse((output / "check.json").exists())
 
     def test_typed_input_and_case_rules(self):
         for gold, typed in (("绿色", "lvse"), ("银行", "yinhang"), ("行走", "xingzou")):

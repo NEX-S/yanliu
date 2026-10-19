@@ -4,7 +4,8 @@
 Each round asks the teacher for context/gold/bucket cases, derives the typed input from gold with
 the pinned pypinyin and rejects cases outside the fixed rules. A bad teacher batch is recorded and
 the next round continues; HTTP, gateway and CLI errors stop the run. One CLI run checks every
-accepted case. Exit status: 0 all rounds valid, 2 some rounds failed, 1 no valid case.
+accepted case. Validated cases and round records are saved after each round, before the next request.
+Exit status: 0 all rounds valid, 2 some rounds failed, 1 no valid case.
 --generate-only saves validated cases without observing CLI candidate scores.
 --pairs supplies public homophone pairs and requires two nonempty contexts per target.
 Round pair_range values are zero-based, with an exclusive end.
@@ -197,7 +198,8 @@ def run(args):
     if pairs is not None:
         files["pairs"] = sha256(args.pairs)
     output.mkdir(parents=True)
-    seen, cases, rounds = set(), [], []
+    data, check = output / "cases.jsonl", output / "check.json"
+    seen, case_count, rounds = set(), 0, []
     for number in range(1, args.rounds + 1):
         count, round_pairs, pair_range = args.cases_per_round, None, None
         if pairs is not None:
@@ -222,34 +224,36 @@ def run(args):
             record["error"] = f"{type(error).__name__}: {error}"
         else:
             accepted, rejected = select_cases(generated, seen, number, response_sha256, round_pairs)
-            cases += accepted
+            if accepted:
+                with data.open("a", encoding="utf-8") as stream:
+                    for case in accepted:
+                        stream.write(json.dumps(case, ensure_ascii=False) + "\n")
+                case_count += len(accepted)
             record.update(generated=len(generated), accepted=[case["id"] for case in accepted], rejected=rejected)
             if not accepted:
                 record["error"] = "no valid cases after rule rejection"
         rounds.append(record)
+        write_json(output / f"round-{number:03d}.json", record)
         print(json.dumps({"round": number, "generated": record.get("generated"),
                           "accepted": len(record.get("accepted", [])), "error": record.get("error")},
                          ensure_ascii=False), flush=True)
     buckets = {}
-    if cases:
-        data, check = output / "cases.jsonl", output / "check.json"
-        data.write_text("".join(json.dumps(case, ensure_ascii=False) + "\n" for case in cases), encoding="utf-8")
-        if not args.generate_only:
-            subprocess.run([str(binary), "--model", str(model), "evaluate", "--data", str(data), "--output", str(check)],
-                           cwd=ROOT, check=True, stdout=subprocess.DEVNULL)
-            report = json.loads(check.read_text(encoding="utf-8"))
-            if report["format"] != "yanliu-candidate-check-v1":
-                raise ValueError(f"unsupported CLI report format: {report['format']}")
-            buckets = report["buckets"]
+    if case_count and not args.generate_only:
+        subprocess.run([str(binary), "--model", str(model), "evaluate", "--data", str(data), "--output", str(check)],
+                       cwd=ROOT, check=True, stdout=subprocess.DEVNULL)
+        report = json.loads(check.read_text(encoding="utf-8"))
+        if report["format"] != "yanliu-candidate-check-v1":
+            raise ValueError(f"unsupported CLI report format: {report['format']}")
+        buckets = report["buckets"]
     failed = [record["round"] for record in rounds if "error" in record]
-    status = "failed" if not cases else "partial" if failed else "complete"
+    status = "failed" if not case_count else "partial" if failed else "complete"
     write_json(output / "summary.json", {
         "status": status, "mode": "pairs" if pairs is not None else "general",
-        "generate_only": args.generate_only, "check_skipped": args.generate_only or not cases,
+        "generate_only": args.generate_only, "check_skipped": args.generate_only or not case_count,
         "teacher_model": TEACHER_MODEL, "endpoint": endpoint,
         "pypinyin": PYPINYIN_VERSION, "argv": sys.argv, "files": files, "rounds": rounds, "buckets": buckets,
     })
-    print(json.dumps({"status": status, "output_dir": str(output), "cases": len(cases),
+    print(json.dumps({"status": status, "output_dir": str(output), "cases": case_count,
                       "failed_rounds": failed, "all": buckets.get("all")}, ensure_ascii=False), flush=True)
     return status
 

@@ -31,7 +31,7 @@ OPENAI_BASE_URL="${ANTHROPIC_BASE_URL%/anthropic}/openai" \
 .cache/yanliu-lab/bin/python -m unittest discover -s tests -p test_ime_lab.py
 ```
 
-本机 llmux 的 API base 为 `<origin>/openai`（请求 `/openai/chat/completions`），也可用 `--endpoint` 指定。输出目录须不存在，其中保存每轮原始请求与响应、`cases.jsonl`、CLI 报告 `check.json`，以及含拒绝原因和源码、binary、词库、模型哈希的 `summary.json`。教师内容无效的轮次记录后继续：全部有效退出 0，部分轮次无效退出 2，没有有效案例退出 1；HTTP 与 CLI 错误直接失败。案例是自动注音的合成开发数据，可能有多音字错误；用于调参后不能再当作独立评估。
+本机 llmux 的 API base 为 `<origin>/openai`（请求 `/openai/chat/completions`），也可用 `--endpoint` 指定。输出目录须不存在，其中保存每轮原始请求与响应。每轮校验完成即追加 `cases.jsonl` 并保存 `round-XXX.json` 中的接受项、拒绝原因与响应哈希；后续 HTTP 请求失败也会保留已完成的轮次。全部生成完成后才运行一次 CLI，保存 `check.json` 与含各轮记录和源码、binary、词库、模型哈希的 `summary.json`；中途失败不生成最终汇总。教师内容无效的轮次记录后继续：全部有效退出 0，部分轮次无效退出 2，没有有效案例退出 1；HTTP 与 CLI 错误直接失败。案例是自动注音的合成开发数据，可能有多音字错误；用于调参后不能再当作独立评估。
 
 训练语境消歧时可加 `--pairs data/training/homophone-pairs-v1.json`，每个公开词对生成两词各两条非空前文。程序先验证两词全拼相同，再拒绝额外目标、缺配对、不平衡和重复案例；`--cases-per-round 32 --rounds 15` 覆盖该文件的 120 对词。`--generate-only` 保存原始响应和通过校验的案例，跳过候选评分，供先冻结分组与未观测留出。来源与限制见 [训练数据](../data/training/README.md)。
 
