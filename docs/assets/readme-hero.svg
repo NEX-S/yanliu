@@ -1,0 +1,58 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="480" viewBox="0 0 1280 480" fill="none" role="img" aria-labelledby="title desc">
+  <title id="title">砚流 · Yanliu</title>
+  <desc id="desc">墨绿色背景与流线，砚流中文拼音输入法。右侧为 nihao 选出“你好”的输入示意，并非桌面截图。</desc>
+  <defs>
+    <linearGradient id="ink" x1="0" y1="0" x2="1280" y2="480" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#102F2C"/>
+      <stop offset="1" stop-color="#081E20"/>
+    </linearGradient>
+    <linearGradient id="flow" x1="650" y1="480" x2="1200" y2="0" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#8BBBA3" stop-opacity="0"/>
+      <stop offset="0.55" stop-color="#8BBBA3" stop-opacity="0.26"/>
+      <stop offset="1" stop-color="#8BBBA3" stop-opacity="0.03"/>
+    </linearGradient>
+    <filter id="shadow" x="-15%" y="-20%" width="130%" height="150%">
+      <feDropShadow dx="0" dy="18" stdDeviation="24" flood-color="#020E10" flood-opacity="0.28"/>
+    </filter>
+  </defs>
+  <rect width="1280" height="480" rx="20" fill="url(#ink)"/>
+  <g stroke="url(#flow)" stroke-width="1.2">
+    <path d="M550 480C600 290 757 457 845 278S1038 63 1280 92"/>
+    <path d="M580 480C630 290 787 457 875 278S1068 63 1310 92"/>
+    <path d="M610 480C660 290 817 457 905 278S1098 63 1340 92"/>
+    <path d="M640 480C690 290 847 457 935 278S1128 63 1370 92"/>
+    <path d="M670 480C720 290 877 457 965 278S1158 63 1400 92"/>
+    <path d="M700 480C750 290 907 457 995 278S1188 63 1430 92"/>
+    <path d="M730 480C780 290 937 457 1025 278S1218 63 1460 92"/>
+    <path d="M760 480C810 290 967 457 1055 278S1248 63 1490 92"/>
+  </g>
+  <g font-family="'Noto Sans CJK SC', 'Microsoft YaHei', sans-serif">
+    <circle cx="76" cy="65" r="4" fill="#9CC4A7"/>
+    <text x="94" y="71" fill="#A9C5B8" font-size="15" letter-spacing="3">YANLIU / CHINESE INPUT METHOD</text>
+    <text x="69" y="218" fill="#F3F0E5" font-family="'Noto Serif CJK SC', 'Songti SC', serif" font-size="116" font-weight="500" letter-spacing="14">砚流</text>
+    <rect x="361" y="124" width="36" height="43" rx="3" fill="#B85E49"/>
+    <text x="379" y="153" fill="#FFF4DE" text-anchor="middle" font-family="'Noto Serif CJK SC', serif" font-size="23">砚</text>
+    <text x="75" y="286" fill="#E2E8DA" font-size="31" font-weight="400" letter-spacing="3">离线落字，自在成文。</text>
+    <text x="76" y="331" fill="#A4BCB2" font-size="18" letter-spacing="1">本地词库 · 语境排序 · 个人学习</text>
+    <path d="M76 390H112" stroke="#9CC4A7" stroke-width="2"/>
+    <text x="128" y="396" fill="#8EAEA3" font-size="14" letter-spacing="2">RUST / IBUS / GNOME · WAYLAND</text>
+  </g>
+  <g filter="url(#shadow)">
+    <rect x="744" y="133" width="450" height="224" rx="18" fill="#F4F1E7"/>
+    <rect x="744.5" y="133.5" width="449" height="223" rx="17.5" stroke="#FFFFFF" stroke-opacity="0.5"/>
+  </g>
+  <g font-family="'Noto Sans CJK SC', 'Microsoft YaHei', sans-serif">
+    <text x="775" y="173" fill="#688075" font-size="13" letter-spacing="2">拼音输入</text>
+    <rect x="1104" y="151" width="60" height="27" rx="13.5" fill="#E6E7DA"/>
+    <text x="1134" y="169" fill="#6D7B6F" text-anchor="middle" font-size="12">示意</text>
+    <text x="776" y="227" fill="#193E37" font-family="'Noto Sans Mono', 'DejaVu Sans Mono', monospace" font-size="34" letter-spacing="1">nihao</text>
+    <path d="M890 201V234" stroke="#43826B" stroke-width="2"/>
+    <path d="M775 254H1163" stroke="#D8DFD2"/>
+    <rect x="770" y="274" width="163" height="57" rx="10" fill="#285848"/>
+    <text x="787" y="310" fill="#A8C7B6" font-size="18">1</text>
+    <text x="816" y="313" fill="#FFFDF3" font-size="29" font-weight="500">你好</text>
+    <text x="964" y="310" fill="#869487" font-size="18">2</text>
+    <text x="993" y="313" fill="#52695C" font-size="29">拟好</text>
+    <text x="1162" y="403" fill="#77978A" text-anchor="end" font-size="13" letter-spacing="2">OFFLINE BY DESIGN</text>
+  </g>
+</svg>

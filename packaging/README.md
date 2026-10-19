@@ -20,7 +20,7 @@ CPU 默认安装仓库的 `data/models/sentence-model.safetensors`；设置 `YAN
 
 自定义前缀时，卸载传入同一个 `YANLIU_PREFIX`。卸载保留 `yanliu/config.json` 和个人学习，删除本项目安装文件及环境文件，不更改 GNOME 输入源或其他输入法。
 
-默认配置位于 `~/.config/yanliu/config.json`，绝对 `XDG_CONFIG_HOME` 可替换配置根目录。新配置只有 `data_dir`；服务支持的完整字段见主 README。已有配置逐字保留，新配置与安装在同一事务内创建；安装读取 JSON 中的设备选择以检查构建是否匹配，服务启动时严格检查完整配置。配置属于用户状态，不进入安装哈希。未知字段与类型错误由服务明确拒绝，不自动迁移旧配置。下载过的模型/runtime 与个人数据均不自动删除或改写。
+默认配置位于 `~/.config/yanliu/config.json`，绝对 `XDG_CONFIG_HOME` 可替换配置根目录。新配置只有 `data_dir`；服务支持的完整字段见[配置参考](../docs/USER-GUIDE.md#配置)。已有配置逐字保留，新配置与安装在同一事务内创建；安装读取 JSON 中的设备选择以检查构建是否匹配，服务启动时严格检查完整配置。配置属于用户状态，不进入安装哈希。未知字段与类型错误由服务明确拒绝，不自动迁移旧配置。下载过的模型/runtime 与个人数据均不自动删除或改写。
 
 组件命令只携带 `--ibus --config` 与配置绝对路径，配置路径含空格或中文时正确引用；无设置程序或 `<setup>`。IBus 不扫描用户组件目录，因此安装写入 `~/.config/environment.d/60-yanliu.conf`，将 `IBUS_COMPONENT_PATH` 指向本项目组件目录及安装时已有的系统组件目录。注销重新登录后，在 GNOME 设置 → 键盘 → 输入源中添加“砚流”；安装不会自动选择它。
 
@@ -65,4 +65,4 @@ YANLIU_ACCELERATOR_RUNTIME_DIR="$PWD/.cache/yanliu-openvino" \
 ./packaging/install-local.sh
 ```
 
-改为 `gpu` 使用 GPU FP32；`cpu` 为默认且不接受上述两个加速资产目录。显式模型目录必须同时包含 `sentence-model.safetensors`、`.xml`、`.bin` 和 `.openvino.json`；安装提交前核对源权重及两个 IR 文件与导出清单的哈希。安装只带选中设备需要的库、IR 与许可，省略 GenAI、tokenizers 和 CPU 插件；不自动安装系统驱动。全部产物哈希随安装保留。初次新建的加速配置包含 `device` 和安装后 `runtime_dir`，旧配置仍逐字保留；若旧配置设备与 `YANLIU_DEVICE` 冲突，先明确编辑配置，再执行安装。服务不会自动猜测设备或在失败时改用 CPU。NPU 使用设备默认精度，近似并列时排序可能与 CPU 不同。
+改为 `gpu` 使用 GPU FP32；`cpu` 为默认，可用 `YANLIU_MODEL_DIR` 选择源权重，但不接受 `YANLIU_ACCELERATOR_RUNTIME_DIR`。GPU/NPU 的显式模型目录必须同时包含 `sentence-model.safetensors`、`.xml`、`.bin` 和 `.openvino.json`；安装提交前核对源权重及两个 IR 文件与导出清单的哈希。安装只带选中设备需要的库、IR 与许可，省略 GenAI、tokenizers 和 CPU 插件；不自动安装系统驱动。全部产物哈希随安装保留。初次新建的加速配置包含 `device` 和安装后 `runtime_dir`，旧配置仍逐字保留；若旧配置设备与 `YANLIU_DEVICE` 冲突，先明确编辑配置，再执行安装。服务不会自动猜测设备或在失败时改用 CPU。NPU 使用设备默认精度，近似并列时排序可能与 CPU 不同。

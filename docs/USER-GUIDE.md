@@ -1,0 +1,61 @@
+# 使用手册
+
+[← 返回首页](../README.md) · [安装与卸载](../packaging/README.md) · [开发指南](DEVELOPMENT.md)
+
+这里记录输入操作、配置和本地数据管理。首次安装请从[首页快速开始](../README.md#快速开始)进入。
+
+## 输入操作
+
+- 未提交的拼音显示在候选面板，`▏` 标出拼音编辑位置；应用正文保持原样，确认提交后才替换应用中的选区。Esc 取消时不改正文。
+- 空格选择当前候选，数字 1–9 选择当前页候选；部分选择只消费对应的原始拼音，保留余串。
+- `Ctrl+H/L` 或上下方向键移动候选；`Ctrl+K/J` 或 `PageUp/PageDown` 翻页。候选横排显示。当前高亮候选的辅助说明区分补全、部分转换、换位纠错、邻键替换和漏键恢复，说明文字不进入提交内容。
+- 左右方向键编辑拼音，Home/End 定位拼音首尾，Enter 提交拼音原文，Esc 取消输入。无对应候选的数字、无候选时的空格，以及 `0`，会先提交已有拼音原文，再透传该键，保留输入顺序。
+- 大小写字母均留在预编辑中，拼音匹配忽略大小写，Enter 保留实际键入的大小写。英文、标识符、代码、URL 或命令使用 `Ctrl+Space` 切到英文模式，按键完整透传；切换时先提交未完成原文。
+- 中文标点 `, . ! ? : ; [ ] < > ( )` 对应 `，。！？：；【】《》（）`，反斜杠输出顿号。单引号在已有拼音时分隔音节；其他 ASCII 标点保持半角。预编辑期间标点先提交当前候选，再提交余串原文及标点。
+
+除上述引擎快捷键外，带 Ctrl、Alt 或 Super 的组合键透传。密码及敏感字段透传，不采集上下文或学习。
+
+## 配置
+
+安装创建 `~/.config/yanliu/config.json`；绝对 `XDG_CONFIG_HOME` 替换 `~/.config`。组件通过 `--config PATH` 在启动时读取一次，修改后需重启服务或重新登录。直接运行服务不自动读取用户配置。示例：
+
+```json
+{
+  "data_dir": "/home/user/.local/share/yanliu",
+  "learning_enabled": true
+}
+```
+
+`model` 省略时使用有效 `data_dir/models/sentence-model.safetensors`。支持 `data_dir`、`model`、`user_dictionary`、`learning_enabled`、`device`、`runtime_dir` 和 `contextual_learning`；服务对应 `--data-dir`、`--model`、`--user-dictionary`、`--no-learning`、`--device`、`--runtime-dir`、`--contextual-learning`。`device` 默认为 `cpu`，显式 `gpu` / `npu` 必须配合 `runtime_dir` 和加速构建，初始化或执行失败保留原因报错，不自动切换设备。GPU 以 FP32 执行；NPU 使用设备默认精度，近似并列时排序可能与 CPU 不同。CPU 模式拒绝无用途的 `runtime_dir`。优先级为默认值 → 配置 → 显式 CLI；配置相对路径基于配置文件目录，CLI 相对路径基于工作目录，不展开 `~` 或环境变量。未知字段、非法类型、显式配置缺失或损坏均报出路径及原因。
+
+## 学习
+
+默认只保存明确选择所消费的拼音、文本和次数，不保存应用上下文或 Enter 提交的原文；Completion 可以选择，但未输入的补全部分不写入偏好。偏好最多 4,096 条，由后台线程合并、加锁并原子保存到 `$XDG_STATE_HOME/yanliu/learning.json`（`XDG_STATE_HOME` 未设置或非绝对时为 `~/.local/state/yanliu/learning.json`），目录 0700、文件 0600。正常退出保存最新状态，异常终止可能丢失最近的选择；加载或保存失败保留原始原因。`decode` 与 `evaluate` 不读写系统学习状态。
+
+在配置中显式加入 `"contextual_learning": true` 并重启服务后启用语境学习。选词时，末 32 字前文、实际消费的原始输入和候选共同形成 4,096 维条件特征，只针对明确选中项上方、消费范围和纠错类别相同的竞争候选更新个人线性模型；部分选择只学习实际消费的前缀，敏感输入、Enter 与 Completion 不参与。排序融合冻结的语言分、个人条件分与温和的次数加分，同一拼音可随前文采用不同首选，已有次数不会永久锁定首选。参数在内存中更新，由同一后台线程与次数一起原子保存；不记录明文前文或候选日志，但参数仍可能记住私人信息，不视为匿名数据，不自动上传或分享。关闭 `contextual_learning` 后不应用也不更新已存参数，保留普通次数学习和已有参数。
+
+配置 `"learning_enabled": false` 或服务参数 `--no-learning` 完全关闭学习：不读取已有偏好、不采集新选择、不启动持久线程或访问学习状态目录，选词照常；重新启用后恢复仍保留的偏好。
+
+```sh
+target/release/yanliu learning list
+target/release/yanliu learning clear
+```
+
+`list` 输出状态路径和已持久化的拼音/文本/次数 JSON，不加载词库或模型；服务运行时可能尚有最多约 250ms 的待保存合并。`clear` 原子清空次数和个人参数，也可恢复损坏的快照。它与服务持有同一排他锁，服务使用该状态目录时会明确拒绝；先停止服务，清除后再启动，避免内存中的计数写回。
+
+## 用户词表
+
+用户词表是独立、由用户维护的 UTF-8 Rime 子集文件，默认不启用、不查找文件或目录。自行创建文件并保留词条的来源与适用许可，例如（词条各列之间用真正的 Tab）：
+
+```text
+---
+name: my_words
+version: "1"
+...
+砚流项目	yan liu xiang mu	100
+离线工具	li xian gong ju
+```
+
+CLI 使用 `yanliu --user-dictionary /path/to/words.dict.yaml decode yanliuxiangmu`；IBus 在 `config.json` 加入 `"user_dictionary": "/path/to/words.dict.yaml"`，或使用同名 `--user-dictionary PATH` 参数。配置路径相对配置文件目录，CLI 路径相对工作目录；CLI 覆盖配置。删除配置字段并重启服务即可关闭；`null` 是非法类型。修改、删除文件中的词条后重启生效；程序只在启动时读取，不写回或热更新文件，文件缺失或损坏会保留路径和原因报错。
+
+头部必须以独立的 `...` 行终止；随后允许空行、以 `#` 开头的注释，以及二或三列 TSV：文本、以空白分隔的小写 ASCII 拼音、可选非负有限权重（省略或空白列默认 1，兼容 `%` 后缀）。文本不得含控制字符。纯英文字母词条明确拒绝；英文通过切换输入模式透传。文件最多 8 MiB、10000 条有效数据行，每条拼接后的拼音最多 128 字节（不含音节分隔空白）；只有头部的空表合法。词条与主词库在启动时统一去重、建立索引，沿用普通候选来源、补全身份、消费量和静态预算，权重不保证首选。此词表与 Learning 选择偏好独立，`learning list/clear` 不查看或删除用户词表，关闭学习也不关闭显式词表。
