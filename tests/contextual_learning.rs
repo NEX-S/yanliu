@@ -43,7 +43,11 @@ fn decoder() -> Arc<Decoder> {
 }
 
 fn model() -> Model {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("data/models/sentence-model.safetensors");
+    let path = std::env::var_os("YANLIU_TEST_MODEL")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("data/models/sentence-model.safetensors")
+        });
     Model::load(&path, "cpu", None).unwrap()
 }
 
@@ -253,4 +257,35 @@ fn contextual_correction_can_overcome_a_large_stored_count_without_reversing_oth
         rows.iter().find(|row| row["text"] == "现").unwrap()["count"],
         8
     );
+}
+
+#[test]
+fn contextual_habits_can_reverse_and_relearn_without_replacing_saved_parameters() {
+    let directory = StateDirectory::new();
+    let decoder = decoder();
+    let mut model = model();
+    let mut writer = directory.writer(true);
+    let context = "同一处前文";
+    for expected in ["西安", "现", "西安"] {
+        for _ in 0..4 {
+            let mut session =
+                promoted_session(&decoder, &writer.learning, &mut model, "xian", context);
+            choose(&mut session, expected, 4);
+        }
+        let session = promoted_session(&decoder, &writer.learning, &mut model, "xian", context);
+        assert_eq!(
+            session.candidates()[0].text,
+            expected,
+            "habit phase {expected}"
+        );
+    }
+    writer.finish().unwrap();
+    let snapshot = directory.snapshot();
+    assert_eq!(snapshot["version"], 1);
+    assert_eq!(snapshot["adapter"].as_array().unwrap().len(), 4096);
+    let mut writer = directory.writer(true);
+    let session = promoted_session(&decoder, &writer.learning, &mut model, "xian", context);
+    assert_eq!(session.candidates()[0].text, "西安");
+    writer.finish().unwrap();
+    assert_eq!(directory.snapshot(), snapshot);
 }

@@ -1,0 +1,10 @@
+{"id": "0-西安", "input": "xian", "context": "乘火车前往", "select": {"text": "西安", "consumed": 4}}
+{"id": "0-现", "input": "xian", "context": "此时此刻", "select": {"text": "现", "consumed": 4}}
+{"id": "1-西安", "input": "xian", "context": "乘火车前往", "select": {"text": "西安", "consumed": 4}}
+{"id": "1-现", "input": "xian", "context": "此时此刻", "select": {"text": "现", "consumed": 4}}
+{"id": "2-西安", "input": "xian", "context": "乘火车前往", "select": {"text": "西安", "consumed": 4}}
+{"id": "2-现", "input": "xian", "context": "此时此刻", "select": {"text": "现", "consumed": 4}}
+{"id": "3-西安", "input": "xian", "context": "乘火车前往", "select": {"text": "西安", "consumed": 4}}
+{"id": "3-现", "input": "xian", "context": "此时此刻", "select": {"text": "现", "consumed": 4}}
+{"id": "query-西安", "input": "xian", "context": "乘火车前往"}
+{"id": "query-现", "input": "xian", "context": "此时此刻"}

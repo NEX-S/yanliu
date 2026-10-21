@@ -1,6 +1,7 @@
 //! Language-model promotion over existing decoder candidates.
 use crate::{Candidate, CandidateSource, session::SessionSnapshot};
 use chinese_ime_lm::{Reranker, SentenceModel};
+use serde::Serialize;
 use std::{error::Error, path::Path, sync::Arc};
 
 #[cfg(feature = "accelerator")]
@@ -10,6 +11,25 @@ type Result<T> = std::result::Result<T, Box<dyn Error + Send + Sync>>;
 
 pub struct Model {
     backend: Backend,
+}
+
+#[derive(Serialize)]
+pub struct CandidateScore {
+    pub index: usize,
+    pub language: f32,
+    pub dictionary: f32,
+    pub personal: f32,
+    pub count: u32,
+    pub frequency: f32,
+    pub total: f32,
+}
+
+#[derive(Serialize)]
+pub struct Promotion {
+    pub prior_scale: f32,
+    pub margin: f32,
+    pub index: Option<usize>,
+    pub scores: Vec<CandidateScore>,
 }
 
 enum Backend {
@@ -46,6 +66,11 @@ impl Model {
 
     /// Return the index of at most one full-input candidate to move to the front.
     pub fn promotion(&mut self, session: &SessionSnapshot) -> Result<Option<usize>> {
+        Ok(self.explain_promotion(session)?.index)
+    }
+
+    /// The same calculation used by promotion, with contributions for offline diagnostics.
+    pub fn explain_promotion(&mut self, session: &SessionSnapshot) -> Result<Promotion> {
         let SessionSnapshot {
             input,
             context,
@@ -56,12 +81,17 @@ impl Model {
         let personal = learning.as_deref().filter(|learning| learning.contextual());
         let considered = shortlist(input, context, candidates, personal.is_some());
         if considered.len() < 2 {
-            return Ok(None);
+            return Ok(Promotion {
+                prior_scale: 1.0,
+                margin: PROMOTION_MARGIN,
+                index: None,
+                scores: Vec::new(),
+            });
         }
         let considered_candidates = || considered.iter().map(|&i| &candidates[i]);
         let texts: Vec<&str> = considered_candidates().map(|c| c.text.as_str()).collect();
         // Enabling personal learning alone must not remove the no-context leader protection.
-        let mut scores = if context.is_empty()
+        let language = if context.is_empty()
             && matches!(
                 candidates[0].source,
                 CandidateSource::ExactDictionary | CandidateSource::User
@@ -70,26 +100,71 @@ impl Model {
         } else {
             self.language_scores(context, &texts)?
         };
-        // Dictionary words and explicit choices provide a prior. Composed beam scores
-        // include segmentation costs, so their gaps are not word-frequency evidence.
-        if matches!(
+        let dictionary_prior = matches!(
             candidates[0].source,
             CandidateSource::ExactDictionary | CandidateSource::User
-        ) {
-            for (score, &index) in scores.iter_mut().zip(&considered) {
-                *score -=
-                    STATIC_GAP_PENALTY * (candidates[0].score - candidates[index].score).max(0.0);
-            }
-        }
+        );
+        let mut scores: Vec<_> = considered
+            .iter()
+            .zip(language)
+            .map(|(&index, language)| {
+                // Composed beam scores contain segmentation costs, not word-frequency evidence.
+                let dictionary = if dictionary_prior {
+                    -STATIC_GAP_PENALTY * (candidates[0].score - candidates[index].score).max(0.0)
+                } else {
+                    0.0
+                };
+                CandidateScore {
+                    index,
+                    language,
+                    dictionary,
+                    personal: 0.0,
+                    count: 0,
+                    frequency: 0.0,
+                    total: 0.0,
+                }
+            })
+            .collect();
         if let Some(learning) = personal {
             let personal = learning.personal_scores(input, context, considered_candidates());
             let counts = learning.counts(input, considered_candidates());
             for ((score, personal), count) in scores.iter_mut().zip(personal).zip(counts) {
-                *score += personal;
-                *score += 0.15 * (count as f32).ln_1p();
+                score.personal = personal;
+                score.count = count;
+                score.frequency = 0.15 * (count as f32).ln_1p();
             }
         }
-        Ok(best_promotion(&considered, &scores))
+        // A larger LM can produce much wider likelihood gaps for the same alternatives.
+        // Personal updates use fixed feature units, so compare them to a bounded prior range.
+        // Scaling its margin too preserves the base decision before personal feedback exists.
+        let prior_scale = if scores
+            .iter()
+            .any(|score| score.personal != 0.0 || score.count > 0)
+        {
+            let low = scores
+                .iter()
+                .map(|score| score.language + score.dictionary)
+                .fold(f32::INFINITY, f32::min);
+            let high = scores
+                .iter()
+                .map(|score| score.language + score.dictionary)
+                .fold(f32::NEG_INFINITY, f32::max);
+            (high - low).max(1.0)
+        } else {
+            1.0
+        };
+        for score in &mut scores {
+            score.total = (score.language + score.dictionary) / prior_scale
+                + score.personal
+                + score.frequency;
+        }
+        let margin = PROMOTION_MARGIN / prior_scale;
+        Ok(Promotion {
+            index: best_promotion(&scores, margin),
+            prior_scale,
+            margin,
+            scores,
+        })
     }
 
     fn language_scores(&mut self, context: &str, texts: &[&str]) -> Result<Vec<f32>> {
@@ -146,14 +221,14 @@ impl Model {
 const PROMOTION_MARGIN: f32 = 0.25;
 const STATIC_GAP_PENALTY: f32 = 2.0;
 
-fn best_promotion(indices: &[usize], scores: &[f32]) -> Option<usize> {
+fn best_promotion(scores: &[CandidateScore], margin: f32) -> Option<usize> {
     let mut best = 0;
     for i in 1..scores.len() {
-        if scores[i] > scores[best] {
+        if scores[i].total > scores[best].total {
             best = i;
         }
     }
-    (best != 0 && scores[best] > scores[0] + PROMOTION_MARGIN).then(|| indices[best])
+    (best != 0 && scores[best].total > scores[0].total + margin).then(|| scores[best].index)
 }
 
 fn answers_input(input: &str, candidate: &Candidate) -> bool {
@@ -235,6 +310,28 @@ mod tests {
             Path::new(env!("CARGO_MANIFEST_DIR")).join("data/models/sentence-model.safetensors");
         Model::load(&path, "cpu", None)
             .expect("download the pinned model with scripts/fetch_assets.py")
+    }
+
+    #[test]
+    fn empty_personal_state_preserves_base_promotions() {
+        let mut model = model();
+        let candidates = [
+            candidate("现", 4, CandidateSource::Composed),
+            candidate("西安", 4, CandidateSource::Composed),
+            candidate("线", 4, CandidateSource::Composed),
+        ];
+        for context in ["", "我去", "此时此刻", "乘火车前往"] {
+            let mut session = snapshot("xian", context, &candidates);
+            let base = model.explain_promotion(&session).unwrap();
+            session.learning = Some(Arc::new(Learning::new(true)));
+            let personal = model.explain_promotion(&session).unwrap();
+            assert_eq!(base.index, personal.index, "context={context}");
+            assert_eq!(personal.prior_scale, 1.0);
+            assert_eq!(
+                serde_json::to_value(base).unwrap(),
+                serde_json::to_value(personal).unwrap()
+            );
+        }
     }
 
     #[test]

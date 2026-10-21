@@ -84,6 +84,8 @@ target/release/yanliu --model data/models/sentence-model.safetensors \
 
 不带 `--model` 时只使用词库。`decode` 和 `evaluate` 不读写桌面选词记录；批量评估方法见[开发文档](docs/DEVELOPMENT.md#cli-评估)。
 
+排查“选过多次却没记住”时，可以用 [`learning replay`](docs/DEVELOPMENT.md#回放个人学习) 在全新目录中回放公开纠正，查看各项评分及保存、重载前后的结果。
+
 </details>
 
 ## 模型

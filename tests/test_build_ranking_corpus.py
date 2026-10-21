@@ -111,6 +111,14 @@ class RankingCorpusTests(unittest.TestCase):
         self.assertEqual(BUILD.query_key(first), BUILD.query_key(second))
         self.assertNotEqual(BUILD.query_key(first), BUILD.query_key(dict(second, context="他来")))
 
+    def test_public_learning_choices_are_excluded_but_queries_without_choices_are_not_labels(self):
+        path = ROOT / "data/eval/learning-context.jsonl"
+        excluded, _ = BUILD.evaluation_queries([path])
+        self.assertEqual(excluded, {
+            BUILD.query_key({"input": "xian", "context": "乘火车前往", "gold": "西安"}),
+            BUILD.query_key({"input": "xian", "context": "此时此刻", "gold": "现"}),
+        })
+
     def test_cli_uses_public_evaluations_and_explicit_repeatable_exclusions(self):
         with tempfile.TemporaryDirectory(prefix="ranking-cli-", dir=CACHE) as temporary:
             directory = Path(temporary)

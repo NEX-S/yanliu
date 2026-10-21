@@ -240,7 +240,9 @@ def evaluation_exclusions(paths):
         with path.open(encoding="utf-8") as stream:
             for line in stream:
                 row = json.loads(line)
-                golds, context = row.get("golds", [row.get("gold")]), row.get("context", "")
+                selected = row.get("select")
+                target = selected.get("text") if isinstance(selected, dict) else None
+                golds, context = row.get("golds", [row.get("gold", target)]), row.get("context", "")
                 if isinstance(golds, list) and isinstance(context, str):
                     for gold in golds:
                         if isinstance(gold, str):

@@ -3,6 +3,8 @@ use std::{error::Error, path::PathBuf, sync::Arc};
 use yanliu::{Decoder, Dictionary, Session, model::Model};
 #[path = "yanliu/evaluate.rs"]
 mod evaluate;
+#[path = "yanliu/learning_replay.rs"]
+mod learning_replay;
 
 type Result<T> = std::result::Result<T, Box<dyn Error + Send + Sync>>;
 
@@ -52,6 +54,17 @@ enum Command {
 enum LearningCommand {
     List,
     Clear,
+    /// Replay public explicit choices in a new isolated state, then reload it.
+    Replay {
+        #[arg(long)]
+        data: PathBuf,
+        /// Must not exist; never uses the system learning directory.
+        #[arg(long)]
+        state_dir: PathBuf,
+        /// New JSON report file.
+        #[arg(long)]
+        output: PathBuf,
+    },
 }
 
 fn main() -> Result<()> {
@@ -97,6 +110,18 @@ fn main() -> Result<()> {
         Command::Evaluate { data, output } => {
             let (decoder, model) = assets()?;
             evaluate::run(&data, &output, &decoder, model)?;
+        }
+        Command::Learning {
+            command:
+                LearningCommand::Replay {
+                    data,
+                    state_dir,
+                    output,
+                },
+        } => {
+            let (decoder, model) = assets()?;
+            let model = model.ok_or("learning replay requires --model")?;
+            learning_replay::run(&data, &state_dir, &output, &decoder, model)?;
         }
         Command::Learning { command } => {
             let directory = yanliu::learning::state_directory()?;

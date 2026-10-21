@@ -162,7 +162,9 @@ def evaluation_queries(paths):
                 row = json.loads(line)
                 if not isinstance(row, dict) or not isinstance(row.get("input"), str):
                     continue
-                golds = row.get("gold", row.get("golds", []))
+                selected = row.get("select")
+                target = selected.get("text") if isinstance(selected, dict) else None
+                golds = row.get("gold", row.get("golds", [target] if target else []))
                 if isinstance(golds, str):
                     golds = [golds]
                 if not isinstance(row.get("context", ""), str) or not isinstance(golds, list):

@@ -235,6 +235,10 @@ class CorpusPreparationTests(unittest.TestCase):
             self.assertEqual(values, {"他说今天天气很好", "我生病了不是吗", "我今天没有生病"})
             self.assertEqual(files[0]["sha256"], PREPARE.digest(path))
 
+    def test_public_learning_choices_obey_the_same_text_exclusion_length_rule(self):
+        values, _ = PREPARE.evaluation_exclusions([ROOT / "data/eval/learning-context.jsonl"])
+        self.assertEqual(values, {"乘火车前往西安"})
+
 
 if __name__ == "__main__":
     unittest.main()

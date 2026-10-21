@@ -20,6 +20,24 @@ IBus 按连接顺序处理焦点和后续按键。修改输入后，Session 更�
 
 `contextual_learning` 默认关闭。开启后，用有限前文和真实候选的纠正更新 4,096 维本地条件参数，与次数保存在同一快照中。不保存明文前文或候选日志；参数本身仍按私人数据管理。
 
+个人分与公共语言模型的分值尺度不同。有个人反馈时，排序把当前短名单的语言和词库基础分、提升门槛同除以 `max(1, 基础分范围)`，再加个人分与次数项，避免大模型更宽的似然差压过纠正。没有反馈时沿用原分数。该调整保留既有特征、参数含义和快照格式，不需要清除选词记录。
+
+### 回放个人学习
+
+`learning replay` 在全新的隔离目录中重放公开选词，使用真实 Session 和持久化路径。每行含唯一 `id`、`input`、可选 `context`，需要纠正时提供明确的 `select.text` 和 `select.consumed`（原始拼音字节数）；省略 `select` 只查询。
+
+```json
+{"id":"now-1","input":"xian","context":"此时此刻","select":{"text":"现","consumed":4}}
+```
+
+```sh
+target/release/yanliu --model data/models/sentence-model.safetensors \
+  learning replay --data data/eval/learning-context.jsonl \
+  --state-dir results/new-learning-state --output results/new-learning-report.json
+```
+
+状态目录和报告都必须不存在，父目录须已存在；两者拒绝使用系统学习目录或其内部路径。命令不会读取桌面选词记录。报告保留每次选择前后的候选身份、消费字节和剩余拼音，以及语言、词库、个人参数与次数的评分贡献。结束时 flush 并重新加载，比较完整候选与评分、快照字节；`reload_preserved_rankings` 和 `reload_preserved_snapshot` 表示结果。`promotion.index`、评分项的 `index` 为提升前的 0 基候选下标，`before_rank` 为 1 基名次。诊断报告含本次显式提供的明文前文，公开前需自行检查内容。
+
 ## CLI 评估
 
 候选质量和输入行为通过与 IBus 相同的 Session 路径在 CLI 中检查，不需要驱动真实 GNOME 窗口。`evaluate` 读取 JSONL，每行含 `input` 与 `gold`（多个答案用 `golds` 数组），可带 `id`、`context`、`bucket`：
@@ -123,7 +141,7 @@ python3 -m venv .cache/yanliu-corpus
 
 本轮从随机权重训练的字符模型为 6 层、4 个注意力头、隐藏维度 256，词表 9,506 项，窗口 64 字符，约 719 万参数。INT8 源权重约 7.14 MiB。词表覆盖全部 8,105 个规范汉字，并分别记录 3,500 个一级常用字的覆盖、正文出现次数与 OOV 比例。
 
-新权重尚未作为 GitHub Release 附件发布，默认下载仍为公共 4M 模型，已有的可选发布包为 25M。本机实验结果不代表默认安装的成绩。默认 CPU 直接使用 Rust 推理与前缀缓存；GPU / NPU 使用显式准备的固定形状 IR。Session 回放用于检查处理成本，不包含 GNOME 绘制或真实键到屏幕延迟。
+这是历史 7M 实验，当前默认已更新为从随机权重训练的 4M v2，可选 25M v2，见[模型说明](../README.md#模型)。默认 CPU 直接使用 Rust 推理与前缀缓存；GPU / NPU 使用显式准备的固定形状 IR。Session 回放用于检查处理成本，不包含 GNOME 绘制或真实键到屏幕延迟。
 
 ## 验证
 
