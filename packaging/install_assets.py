@@ -134,7 +134,14 @@ def check_unmanaged_conflicts(stage, extra):
 def managed_layout(destination, launcher, component, environment, config_file, settings, device):
     if destination.is_symlink() or not destination.is_dir():
         raise ValueError(f'{destination}: expected a managed installation directory')
-    if not launcher.is_symlink() or launcher.readlink() != destination / 'bin/yanliu-ibus':
+    target = destination / 'bin/yanliu-ibus'
+    if launcher.is_symlink():
+        managed_launcher = launcher.readlink() == target
+    else:
+        legacy = f'#!/bin/sh\nset -eu\nexec "{target}" "$@"\n'.encode()
+        managed_launcher = (launcher.is_file() and launcher.stat().st_mode & 0o7777 == 0o755
+                            and launcher.read_bytes() == legacy)
+    if not managed_launcher:
         raise ValueError(f'{launcher}: does not point to the managed service')
     xml = ElementTree.parse(component).getroot()
     if (xml.findtext('name') != 'org.freedesktop.IBus.Yanliu'

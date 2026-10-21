@@ -20,7 +20,7 @@ CPU 默认安装仓库的 `data/models/sentence-model.safetensors`，即[从随�
 ./packaging/install-local.sh --upgrade
 ```
 
-升级先校验当前 `installation.json` 及全部受管理文件的 SHA-256，并检查启动链接、组件、环境文件和配置仍指向这份安装。支持当前安装工具的 `model` 记录，以及本机早期安装实际使用的 `selected_model` / `model_provenance` 记录；其他清单形状明确拒绝，不猜测迁移。已有配置、启动链接、组件 XML 和环境文件逐字保留。配置的设备需与 `YANLIU_DEVICE` 一致，`data_dir`、显式 `model` 和 `runtime_dir` 需指向受管理目录；外部模型或数据目录应由用户单独维护。
+升级先校验当前 `installation.json` 及全部受管理文件的 SHA-256，并检查启动入口、组件、环境文件和配置仍指向这份安装。启动入口支持当前符号链接，以及早期安装实际使用、以 `#!/bin/sh`、`set -eu` 和一条 `exec` 转发到受管理服务的精确 755 脚本；不执行脚本，也不接受其他目标或额外命令。安装清单支持当前工具的 `model` 记录，以及本机早期安装实际使用的 `selected_model` / `model_provenance` 记录；其他形状明确拒绝，不猜测迁移。已有配置、启动入口、组件 XML 和环境文件逐字保留。配置的设备需与 `YANLIU_DEVICE` 一致，`data_dir`、显式 `model` 和 `runtime_dir` 需指向受管理目录；外部模型或数据目录应由用户单独维护。
 
 新资产准备好后，旧资产移到同盘的 `share/.yanliu-previous`，新资产再移入 `share/yanliu`。当前目录中的非托管文件、目录和符号链接随安装移动到新的当前目录，不读取正文；若与新资产同名则拒绝升级。失败时恢复当前和上一版资产；如果恢复本身也失败，保留整个暂存目录，并在原错误中给出实际路径供人工恢复，不自动清除其中的资产或自定义文件。连续升级只保留上一版；更老备份须通过哈希校验且没有非托管内容，才会在成功后清除。
 

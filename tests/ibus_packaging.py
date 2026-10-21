@@ -236,7 +236,22 @@ runpy.run_path(sys.argv[0], run_name='__main__')
         assert (previous / 'keep-custom.txt').read_text() == 'must not delete\n'
     (previous / 'keep-custom.txt').unlink()
 
-    # The one historical, actually installed manifest shape remains verifiable.
+    # The historical launcher and manifest stay intact through upgrade, rollback and upgrade.
+    launcher = prefix / 'bin/yanliu-ibus'
+    legacy_launcher = f'#!/bin/sh\nset -eu\nexec "{share}/bin/yanliu-ibus" "$@"\n'.encode()
+    launcher.unlink()
+    launcher.write_bytes(legacy_launcher)
+    launcher.chmod(0o755)
+    before_launcher_check = (share / 'installation.json').read_bytes()
+    foreign_launcher = b'#!/bin/sh\nset -eu\nexec "/usr/bin/other-input-method" "$@"\n'
+    for invalid in (foreign_launcher, legacy_launcher.replace(b'set -eu\n', b'set -eu\necho third-party\n')):
+        launcher.write_bytes(invalid)
+        result = install('--upgrade')
+        assert result.returncode != 0 and 'does not point to the managed service' in result.stderr
+        assert launcher.read_bytes() == invalid
+        assert (share / 'installation.json').read_bytes() == before_launcher_check
+        assert 'third-party' not in result.stdout, 'installer must not execute the launcher'
+    launcher.write_bytes(legacy_launcher)
     record = json.loads(second_manifest)
     provenance = share / 'models/provenance.json'
     provenance.write_text('{"fixture":"historical"}\n')
@@ -246,6 +261,12 @@ runpy.run_path(sys.argv[0], run_name='__main__')
     (share / 'installation.json').write_text(json.dumps(record))
     result = install('--upgrade')
     assert result.returncode == 0, result.stderr
+    assert json.loads((previous / 'installation.json').read_text()) == record
+    assert launcher.read_bytes() == legacy_launcher and launcher.stat().st_mode & 0o7777 == 0o755
+    for action in ('--rollback', '--upgrade'):
+        result = install(action)
+        assert result.returncode == 0, result.stderr
+        assert launcher.read_bytes() == legacy_launcher and launcher.stat().st_mode & 0o7777 == 0o755
     assert json.loads((previous / 'installation.json').read_text()) == record
     assert_preserved()
     damaged = share / 'bin/yanliu-ibus'
