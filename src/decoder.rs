@@ -244,20 +244,21 @@ impl Decoder {
             }
             false
         };
+        let mut edited = key.to_vec();
         for end in (2..=key.len()).rev() {
             for left in 0..end - 1 {
                 let at = raw_ends[left];
                 if raw_ends[left + 1] != at + 1 || key[left] == key[left + 1] {
                     continue;
                 }
-                let mut swapped = key[..end].to_vec();
-                swapped.swap(left, left + 1);
-                if push(&swapped, &|ends| CandidateSource::Transposition {
+                edited.swap(left, left + 1);
+                if push(&edited[..end], &|ends| CandidateSource::Transposition {
                     at,
                     ends,
                 }) {
                     return;
                 }
+                edited.swap(left, left + 1);
             }
         }
         // Spaces separate and pad the keyboard rows.
@@ -273,13 +274,13 @@ impl Decoder {
                     if to == b' ' {
                         continue;
                     }
-                    let mut substituted = key[..end].to_vec();
-                    substituted[left] = to;
-                    if push(&substituted, &|ends| {
+                    edited[left] = to;
+                    if push(&edited[..end], &|ends| {
                         CandidateSource::NeighborSubstitution { at, to, ends }
                     }) {
                         return;
                     }
+                    edited[left] = key[left];
                 }
             }
         }

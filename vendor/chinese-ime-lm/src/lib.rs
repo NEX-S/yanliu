@@ -166,8 +166,8 @@ struct TailRun {
     base: usize,
     keys: Vec<Vec<f32>>,
     values: Vec<Vec<f32>>,
-    /// Normalized hidden state after each of this run's positions, which is what predicts the next.
-    hidden: Vec<Vec<f32>>,
+    /// Contiguous normalized hidden rows, each `n_embd` wide, which predict the next position.
+    hidden: Vec<f32>,
     /// Log-probability of the run's first `i + 1` tokens, summed left to right.
     cumulative: Vec<f32>,
 }
@@ -188,7 +188,8 @@ impl TailRun {
                     .iter()
                     .map(|value| value[..width].to_vec())
                     .collect(),
-                last_distribution: model.distribution(&self.hidden[taken - 1]),
+                last_distribution: model
+                    .distribution(&self.hidden[(taken - 1) * n_embd..taken * n_embd]),
             },
             self.cumulative[taken - 1],
         )
@@ -196,14 +197,14 @@ impl TailRun {
 
     /// This run's leading `taken` positions followed by `rest`, as one run over the whole
     /// candidate, so the next keystroke can resume anywhere along it.
-    fn joined(&self, taken: usize, carried: f32, rest: TailRun) -> TailRun {
+    fn joined(&self, taken: usize, n_embd: usize, carried: f32, rest: TailRun) -> TailRun {
         TailRun {
             base: self.base,
             keys: rest.keys,
             values: rest.values,
-            hidden: self.hidden[..taken]
+            hidden: self.hidden[..taken * n_embd]
                 .iter()
-                .cloned()
+                .copied()
                 .chain(rest.hidden)
                 .collect(),
             cumulative: self.cumulative[..taken]
@@ -491,27 +492,11 @@ impl SentenceModel {
         run.cumulative[run.cumulative.len() - 1]
     }
 
-    /// The same run, keeping everything it passed through rather than only the total.
+    /// Runs a candidate, retaining keys, values and normalized hidden rows at every position so
+    /// later candidates can resume at any shared prefix.
     ///
-    /// `score_tail` builds the extended keys and values in order to attend over them and then drops
-    /// them, along with the hidden state at every position and the running sum. Those are what a
-    /// caller needs to stop part-way through a candidate and resume somewhere else, which is the
-    /// whole point: consecutive keystrokes re-score candidates that mostly repeat the previous
-    /// keystroke's, and the repeated part need not be run twice.
-    ///
-    /// Keeping every position rather than only the last one is what makes partial agreement usable.
-    /// Candidates typically share a leading stretch and then diverge — the decoder revises the last
-    /// character or two as a syllable completes — so a resume point that only exists at the end of
-    /// a candidate is one almost nothing matches. Position-wise, the shared stretch is reusable
-    /// however far it runs.
-    ///
-    /// The keys and values are stored whole and truncated when resumed: position `k`'s cache is a
-    /// prefix of the full one, so a shorter resume costs a slice rather than a separate copy. Cost
-    /// is therefore linear in the candidate's length, not quadratic.
-    ///
-    /// Grouping the sum differently is the one thing resuming does change. `(a + b) + c` and
-    /// `a + (b + c)` are not the same f32, so a resumed score can differ from a single-pass score
-    /// in the last place. The eval covers both paths rather than a unit test asserting equality.
+    /// Resuming adds a carried score to each new local cumulative sum. Keep this grouping: f32
+    /// addition cannot be reassociated without changing score bits.
     fn run_tail(&self, prefix: &Prefix, tail: &[u32]) -> TailRun {
         let n_embd = self.config.n_embd;
         let mut x = self.embed(tail, prefix.length);
@@ -527,8 +512,10 @@ impl SentenceModel {
                 3 * n_embd,
             );
             let (q, k, v) = split_qkv(&qkv, tail.len(), n_embd);
-            let mut keys = prefix.keys[layer].clone();
-            let mut values = prefix.values[layer].clone();
+            let mut keys = Vec::with_capacity(prefix.keys[layer].len() + k.len());
+            let mut values = Vec::with_capacity(prefix.values[layer].len() + v.len());
+            keys.extend_from_slice(&prefix.keys[layer]);
+            values.extend_from_slice(&prefix.values[layer]);
             keys.extend_from_slice(&k);
             values.extend_from_slice(&v);
             let attended = self.attention(&q, &keys, &values, tail.len(), prefix.length);
@@ -554,20 +541,18 @@ impl SentenceModel {
         let mut running = prefix.last_distribution[first_token];
         let mut cumulative = Vec::with_capacity(tail.len());
         cumulative.push(running);
-        let mut hidden = Vec::with_capacity(tail.len());
         for step in 0..tail.len() {
-            let row = normed[step * n_embd..(step + 1) * n_embd].to_vec();
+            let row = &normed[step * n_embd..(step + 1) * n_embd];
             if step + 1 < tail.len() {
-                running += self.log_probability(&row, tail[step + 1]);
+                running += self.log_probability(row, tail[step + 1]);
                 cumulative.push(running);
             }
-            hidden.push(row);
         }
         TailRun {
             base: prefix.length,
             keys: keys_out,
             values: values_out,
-            hidden,
+            hidden: normed,
             cumulative,
         }
     }
@@ -793,7 +778,7 @@ impl Reranker {
                     };
                     let (_, _, _, from, carried) = &resumed[cached];
                     let rest = self.model.run_tail(from, &tail[agreed..]);
-                    source.joined(agreed, *carried, rest)
+                    source.joined(agreed, n_embd, *carried, rest)
                 }
                 _ => self.model.run_tail(prefix, tail),
             };
