@@ -1,0 +1,53 @@
+yanliu-4m-v2
+Copyright 2026 Yanliu contributors
+
+2026-10-21：从随机权重完成中文下一字符预训练和真实候选排序微调。未载入旧模型权重，未使用私人对话、应用上下文或系统学习。
+
+训练语料署名与既有许可声明
+以下 declared_license 和 citation 原样保留冻结数据配方中的声明。完整下载 URL、原始文件哈希、分组与排除规则见 provenance.json。
+
+naturalconv
+Repository: https://huggingface.co/datasets/xywang1/NaturalConv
+Revision: adb38574e8014ada1d8404247167582e76b22d05
+Declared license: not declared in dataset card; retain original source
+Attribution: Wang et al. (2021), NaturalConv: A Chinese Dialogue Dataset Towards Multi-turn Topic-driven Conversation; https://arxiv.org/abs/2103.02548
+Data card: https://huggingface.co/datasets/xywang1/NaturalConv/tree/adb38574e8014ada1d8404247167582e76b22d05
+
+cped
+Repository: https://github.com/scutcyr/CPED
+Revision: 1e4b81c28a123f22387e06664f37e5dc9322380f
+Declared license: Apache-2.0 repository license; original TV dialogue source retained
+Attribution: Chen et al. (2022), CPED: A Large-Scale Chinese Personalized and Emotional Dialogue Dataset for Conversational AI; text only, no speaker or visual annotations
+Data card: https://github.com/scutcyr/CPED/tree/1e4b81c28a123f22387e06664f37e5dc9322380f
+License URL: https://raw.githubusercontent.com/scutcyr/CPED/1e4b81c28a123f22387e06664f37e5dc9322380f/LICENSE
+
+lccc
+Repository: https://huggingface.co/datasets/thu-coai/lccc
+Revision: 81d998c10513b24cd560be3448d693e80d753fdc
+Declared license: MIT
+Attribution: Wang, Yida et al. (2020), A Large-Scale Chinese Short-Text Conversation Dataset, NLPCC; https://arxiv.org/abs/2008.03946
+Data card: https://huggingface.co/datasets/thu-coai/lccc/raw/9022ba27075f75c2f59d57d7fa5f42e8d1151aec/README.md
+
+wiki
+Repository: https://huggingface.co/datasets/wikimedia/wikipedia
+Revision: b04c8d1ceb2f5cd4588862100d08de323dccfbaa
+Declared license: CC-BY-SA-3.0 and GFDL (version not specified in card)
+Attribution: Wikimedia Wikipedia 2023-11-01 Chinese dump; original article id/url/title retained in raw Parquet
+Data card: https://huggingface.co/datasets/wikimedia/wikipedia/raw/b04c8d1ceb2f5cd4588862100d08de323dccfbaa/README.md
+
+cqia
+Repository: https://huggingface.co/datasets/m-a-p/COIG-CQIA
+Revision: 8b55868c6168adf86c30e7ca0f782cca1c514297
+Declared license: More Information Needed; no unified license declared; per-row copyright retained in raw JSONL
+Attribution: Bai, Yuelin et al. (2024), COIG-CQIA: Quality is All You Need for Chinese Instruction Fine-tuning; https://arxiv.org/abs/2403.18058
+Data card: https://huggingface.co/datasets/m-a-p/COIG-CQIA/raw/8b55868c6168adf86c30e7ca0f782cca1c514297/README.md
+
+tnews
+Repository: https://huggingface.co/datasets/clue/clue
+Revision: 28178267a609dd08bdc703dd6c931dfc2c2f4431
+Declared license: unknown
+Attribution: Xu, Liang et al. (2020), CLUE: A Chinese Language Understanding Evaluation Benchmark; https://arxiv.org/abs/2004.05986
+Data card: https://huggingface.co/datasets/clue/clue/raw/28178267a609dd08bdc703dd6c931dfc2c2f4431/README.md
+
+字表与拼音标注
+共用 9,358 项字表及字典哈希记录于 provenance.json。排序样本由 pypinyin 0.55.0 自动注音，不是人工金标；本文件不包含原始语料正文。

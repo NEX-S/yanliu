@@ -1,0 +1,18 @@
+yanliu-4m-v2 — 数据来源许可及使用条件声明
+
+本包记录混合公共来源训练模型的已知许可声明；没有为整个新模型声明统一的 Apache-2.0 或其他开源许可。本文件不授予超出来源条款的额外权利，也不替未声明许可的来源补充授权。
+
+使用或再分发本模型时，需遵从各来源适用的许可和使用条款，并保留来源与署名记录。完整固定版本、下载地址、原始文件 SHA256 和归属说明载于 NOTICE 与 provenance.json。
+
+冻结数据配方原有声明：
+
+naturalconv: not declared in dataset card; retain original source
+cped: Apache-2.0 repository license; original TV dialogue source retained
+lccc: MIT
+wiki: CC-BY-SA-3.0 and GFDL (version not specified in card)
+cqia: More Information Needed; no unified license declared; per-row copyright retained in raw JSONL
+tnews: unknown
+
+上述文字保留来源原有声明，不将 NaturalConv 未声明、COIG-CQIA 无统一声明或 TNEWS unknown 改写为已授权。Wikipedia 的 CC-BY-SA/GFDL、LCCC 的 MIT 及 CPED 仓库 Apache-2.0 声明仍按各自来源适用。
+
+作者说明：本模型于 2026-10-21 由砚流训练脚本从全随机参数初始化，使用公开中文语料和真实输入法候选训练。训练代码自身的许可证与训练权重的数据来源声明分别记录；代码许可不自动成为本模型的统一许可。

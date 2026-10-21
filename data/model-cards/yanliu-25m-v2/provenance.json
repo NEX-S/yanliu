@@ -1,0 +1,2920 @@
+{
+  "format": "yanliu-public-model-v1",
+  "name": "yanliu-25m-v2",
+  "publication_status": "optional model",
+  "model": {
+    "path": "models/sentence-model.safetensors",
+    "sha256": "724d1dad100a98c799d526b0c699d5f3eccf0f995d53bd5634ad98a0cdcdf7b1"
+  },
+  "model_size_bytes": 24028120,
+  "parameters": 23536128,
+  "config": {
+    "vocab": 9358,
+    "n_layer": 8,
+    "n_head": 8,
+    "n_embd": 448,
+    "context": 64,
+    "dropout": 0.1
+  },
+  "tied_embeddings": true,
+  "quantization": "Per-row symmetric int8 for two-dimensional weights except pos.weight; FP32 row scales and remaining tensors.",
+  "license": "models/LICENSE",
+  "upstream_notice": "models/NOTICE",
+  "license_files_sha256": {
+    "LICENSE": "c7ff53955a64919a22f43242515400d159446bd45f8fd241ebed33ffe2a23488",
+    "NOTICE": "ca7223b7674d79011a2b29c04f3f57f8788fc97575e9ea8284acba4936a33521",
+    "README.md": "414650285ce31731cab0c865ed3d94bab4356c0de3d30979891b8b3134b2f435"
+  },
+  "license_statement": "Mixed public sources; per-source attribution retained in data-recipe.json",
+  "unified_model_license_declared": false,
+  "data_classification": "public Chinese text, grouped held-out split; no private conversations or system learning",
+  "attribution": "LCCC-base, Wikimedia Chinese Wikipedia 20231101, COIG-CQIA human answers, CLUE TNEWS, NaturalConv and CPED dialogue text; fixed revisions and hashes in data-recipe.json",
+  "training": {
+    "initialization": "random; no parent weights loaded",
+    "dates": "2026-10-21 to 2026-10-22",
+    "pretraining": {
+      "recipe": {
+        "path": "results/retrain-20261021/large-pretraining/recipe.json",
+        "sha256": "e4ef71d40f3cd2f11c9f2b782c6236a89a9c0f49d465e975b5191d80609cd70d",
+        "bytes": 3960
+      },
+      "selection_record": {
+        "path": "results/retrain-20261021/large-pretraining/selection.json",
+        "sha256": "4a32f1efadc7c9d7e2d5bc7bb7a2b959690bad01354c62a3e9afd6453f3cec54",
+        "bytes": 900
+      },
+      "training_record": {
+        "path": "results/retrain-20261021/large-pretraining/training.json",
+        "sha256": "278e10bb13bca13ce59be54e705b7583d6ae1f69ac422de8006e5cdeea5daaf9",
+        "bytes": 3602
+      },
+      "exit_record": {
+        "path": "results/retrain-20261021/large-pretraining-exit.json",
+        "sha256": "e4296a457ca651d470c84a5f2e8d6b013869bf10e382de7cd45cd7f16bd660b0",
+        "bytes": 74
+      },
+      "exit_code": 0,
+      "arguments": {
+        "train": "data/cache/retrain-20261021/corpus/train.txt",
+        "dev": "data/cache/retrain-20261021/corpus/dev.txt",
+        "spec": "data/cache/retrain-20261021/corpus/large-spec.json",
+        "output_dir": "results/retrain-20261021/large-pretraining",
+        "device": "xpu",
+        "precision": "bf16",
+        "epochs": 8,
+        "max_tokens": 400000000,
+        "max_seconds": 28800.0,
+        "batch": 64,
+        "lr": 0.0003,
+        "threads": 4,
+        "seed": 20261021
+      },
+      "torch": "2.14.1+xpu",
+      "runtime": {
+        "device": "xpu",
+        "precision": "bf16",
+        "attention_backend": "math",
+        "name": "Intel(R) Arc(TM) B390 GPU",
+        "parameter_dtype": "float32",
+        "deterministic_algorithms": false
+      },
+      "data": {
+        "train": "49a91c17f47cea9a96c01f9b6ddba817004ff0f243552cbb76855efc0e2c7e94",
+        "dev": "f8832da8837315e76027bc8c557724ce538cdccc7f0ed32189e38ca2e7d2d583"
+      },
+      "counts": {
+        "train": {
+          "paragraphs": 944984,
+          "empty_lines": 0,
+          "blocks": 1386030,
+          "effective_targets": 52264483,
+          "unknown_targets": 6236,
+          "source_targets": 52270719,
+          "masked_unknown_targets": 6226,
+          "skipped_no_target_blocks": 9,
+          "padding_targets": 36435211
+        },
+        "dev": {
+          "paragraphs": 14169,
+          "empty_lines": 0,
+          "blocks": 32602,
+          "effective_targets": 1663740,
+          "unknown_targets": 90,
+          "source_targets": 1663830,
+          "masked_unknown_targets": 90,
+          "skipped_no_target_blocks": 0,
+          "padding_targets": 422698
+        }
+      },
+      "optimizer": {
+        "name": "AdamW",
+        "betas": [
+          0.9,
+          0.95
+        ],
+        "weight_decay": 0.01,
+        "clip_norm": 1.0,
+        "main_parameter_precision": "float32",
+        "planned_effective_targets": 400000000,
+        "warmup_effective_targets": 409600,
+        "schedule": "cumulative effective targets including the current update; warmup then cosine to 10% peak LR; peak LR is not scaled with batch size"
+      },
+      "batching": {
+        "position_budget": 4096,
+        "batch_argument": "equivalent 64-target windows",
+        "method": "group blocks by non-PAD target span 1..64; shuffle within each group; batch size=floor(position_budget/span); shuffle batches each epoch; crop each batch to its non-PAD span; each block occurs once per complete epoch; development uses the same grouping without shuffling"
+      },
+      "sampling": "each paragraph separately; nonoverlapping target chunks, previous token retained at chunk boundary; no cross-line concatenation; PAD0 and UNK1 targets ignored; UNK1 retained in inputs; blocks without known targets omitted",
+      "limits": "stop at first epoch/token/wall-time budget; evaluate after final partial epoch; stop after two consecutive dev CE non-improvements",
+      "selection_criterion": "lowest complete text dev next-character CE; ties keep earlier checkpoint",
+      "selected_epoch": 8,
+      "selected_epoch_effective_targets": 34148619,
+      "selected_epoch_complete": false,
+      "selected_dev_cross_entropy": 3.1717576242369376,
+      "training_effective_targets": 400000000,
+      "optimizer_steps": 98039,
+      "elapsed_seconds": 19198.65368620804,
+      "stop_reason": "token_limit",
+      "selected_f32_model": {
+        "path": "results/retrain-20261021/large-pretraining/best-f32.safetensors",
+        "sha256": "451f99d538544d139d4d081d83ed7b2c207cdd2ba301a2ac872f3a3d9a97aeb3",
+        "bytes": 94238832
+      },
+      "source": {
+        "scripts/pretrain_model.py": {
+          "path": "scripts/pretrain_model.py",
+          "sha256": "f444073fab402df849fa5ca74de43e5eaec9ddb5c182a968cfb6f702990a5bb4",
+          "bytes": 19001
+        },
+        "vendor/chinese-ime-training/neural/model.py": {
+          "path": "vendor/chinese-ime-training/neural/model.py",
+          "sha256": "0b7fb41aa8a4356fa7757aa1b9e84d5022fa33a5436e695dcc1116b0d34c1f9b",
+          "bytes": 4393
+        }
+      }
+    },
+    "ranking_finetuning": {
+      "recipe": {
+        "path": "results/retrain-20261021/large-ranking/recipe.json",
+        "sha256": "fa482d6d1894e253d72679eee71e98f9db018386eaf8288cb79ce4db58e22c13",
+        "bytes": 91144
+      },
+      "selection_record": {
+        "path": "results/retrain-20261021/large-ranking/selection.json",
+        "sha256": "ad6429e3f128dde76326280f9d19097f5d1a1cb2fac3b14a2b0309c20836b754",
+        "bytes": 26785
+      },
+      "training_record": {
+        "path": "results/retrain-20261021/large-ranking/training.json",
+        "sha256": "cd3775e1768b4fa055297c5f07535040596b17c9a636997287a3a1e6ef0ea2f7",
+        "bytes": 270
+      },
+      "training_data_record": {
+        "path": "results/retrain-20261021/large-ranking/training-data.json",
+        "sha256": "4657197aea362a04702ef020845c86b0257323770c3f1b91d40ed46f80ed3ef1",
+        "bytes": 47491786
+      },
+      "exit_record": {
+        "path": "results/retrain-20261021/large-ranking-exit.json",
+        "sha256": "4ce5d13929ce0ac9ed7e61cf5e02ab145d4dd279dbaf624a978d8c5f3de1bf7a",
+        "bytes": 75
+      },
+      "exit_code": 0,
+      "process_binding": {
+        "pid": 2190917,
+        "start_ticks": 27104848,
+        "started_unix": 1792606126.6015499,
+        "ended_unix": 1792606789.5501359
+      },
+      "arguments": {
+        "model": "results/retrain-20261021/large-pretraining/best-f32.safetensors",
+        "binary": "results/retrain-20261021/baseline/yanliu",
+        "train": "data/cache/retrain-20261021/ranking-train.jsonl",
+        "dev": "data/cache/retrain-20261021/ranking-dev.jsonl",
+        "output_dir": "results/retrain-20261021/large-ranking",
+        "epochs": 1,
+        "lr": 1e-05,
+        "seed": 20261021,
+        "batch": 16,
+        "threads": 4,
+        "device": "xpu",
+        "precision": "bf16",
+        "text_train": "data/cache/retrain-20261021/corpus/train.txt",
+        "text_batch": 16
+      },
+      "torch": "2.14.1+xpu",
+      "runtime": {
+        "device": "xpu",
+        "precision": "bf16",
+        "attention_backend": "math",
+        "name": "Intel(R) Arc(TM) B390 GPU",
+        "parameter_dtype": "float32",
+        "deterministic_algorithms": false
+      },
+      "initial_model": {
+        "path": "results/retrain-20261021/large-pretraining/best-f32.safetensors",
+        "sha256": "451f99d538544d139d4d081d83ed7b2c207cdd2ba301a2ac872f3a3d9a97aeb3",
+        "bytes": 94238832
+      },
+      "binary": {
+        "path": "results/retrain-20261021/baseline/yanliu",
+        "sha256": "84eb045f1e9b9f71d02ccda94f39070927b0a89546fe6c75a0e68046f0847856",
+        "bytes": 2860184
+      },
+      "data": {
+        "train": "477fcef665c90808cc0623bdde85355e40318c450bf5fb7b35872c9fdb230892",
+        "dev": "933a31e6a7e19cdbb393b6bca627614c3be14741327f16a1ca7882ef30fc0b04",
+        "text_train": "49a91c17f47cea9a96c01f9b6ddba817004ff0f243552cbb76855efc0e2c7e94"
+      },
+      "training_cases": 80000,
+      "trainable_cases": 53329,
+      "training_case_statuses": {
+        "gold_outside_shortlist": 20399,
+        "trainable": 53329,
+        "protected_or_no_competition": 6270,
+        "neutral_language_group_oov_leader": 2
+      },
+      "optimizer": {
+        "name": "AdamW",
+        "betas": [
+          0.9,
+          0.95
+        ],
+        "weight_decay": 0.01,
+        "clip_norm": 1.0
+      },
+      "loss": "rankCE + ordinary_text_CE; fixed coefficient 1 for each",
+      "ranking_loss": "CE(mean_character_logp - direct_word_static_gap * 2 + leader_margin_0.25); gold-set marginal CE",
+      "ranking_projection": "full-context Transformer and dropout; vocabulary head and log_softmax only at nonzero candidate mask positions; mean logp per candidate",
+      "oov_policy": "match runtime: ASCII letters or candidates at least context-length neutralize the whole group; skip groups with OOV leader or fewer than two representable candidates; skip groups whose in-shortlist golds are all OOV because their leader-tied language score cannot clear the leader margin; retain the full shortlist and accepted gold identities otherwise; OOV language score equals the differentiable leader language score, leaving static penalties and promotion margin intact",
+      "loss_reporting": "mean_loss and mean_rank_loss are group-weighted; text_cross_entropy is effective-target-weighted",
+      "selected_epoch": 1,
+      "optimizer_steps": 3334,
+      "selected_optimizer_steps": 3334,
+      "auxiliary_text_effective_targets": 2008517,
+      "selection_criterion": "actual CLI int8 development group-mean top1; ties choose earliest epoch",
+      "selected_group_top1_fraction": [
+        5907093833,
+        8805119400
+      ],
+      "selected_f32_model": {
+        "path": "results/retrain-20261021/large-ranking/epoch01-f32.safetensors",
+        "sha256": "44b803060cad01a41e89ab72965f33a7b66cf6e40d75230936345bfc9b33efaa",
+        "bytes": 94238984
+      },
+      "selected_int8_model": {
+        "path": "results/retrain-20261021/large-ranking/epoch01-int8.safetensors",
+        "sha256": "724d1dad100a98c799d526b0c699d5f3eccf0f995d53bd5634ad98a0cdcdf7b1",
+        "bytes": 24028120
+      },
+      "source": {
+        "src/bin/yanliu/evaluate.rs": {
+          "path": "src/bin/yanliu/evaluate.rs",
+          "sha256": "22064f25fa79c8120a56ae7f890f02bc48e86b60f36771d85d239971593a6f80",
+          "bytes": 5434
+        },
+        "src/bin/yanliu-ibus/config.rs": {
+          "path": "src/bin/yanliu-ibus/config.rs",
+          "sha256": "8ef5523167ee58ef65db6a653040e870e983082e59b733786168edcad23652da",
+          "bytes": 11547
+        },
+        "src/bin/yanliu-ibus.rs": {
+          "path": "src/bin/yanliu-ibus.rs",
+          "sha256": "e992916b72528f46d3eb21be84bf105133c5b402ffa749f90ccaf8857cbf9b0a",
+          "bytes": 2699
+        },
+        "src/bin/yanliu.rs": {
+          "path": "src/bin/yanliu.rs",
+          "sha256": "8ac5abc3203b2f95a4777c83ecef2ab6a323232c79b84a7060bb44ce7f6bba12",
+          "bytes": 3875
+        },
+        "src/decoder.rs": {
+          "path": "src/decoder.rs",
+          "sha256": "c951d07793e094bc412e3627b66f5d309279fecab0b643cb0ac9b24b4cd9f4b6",
+          "bytes": 53036
+        },
+        "src/dictionary.rs": {
+          "path": "src/dictionary.rs",
+          "sha256": "8b2e2835951c5951c708c4c7fc10fa4be9773a7ca986ae93bbf73b2e6ce2733e",
+          "bytes": 28587
+        },
+        "src/ibus.rs": {
+          "path": "src/ibus.rs",
+          "sha256": "ea4accb12a23d29205bd4d300be03335db196e925a731203fc2c12d89f9c37b8",
+          "bytes": 68565
+        },
+        "src/learning.rs": {
+          "path": "src/learning.rs",
+          "sha256": "51475c4abb55123fac876176ab1cf65417999e01d37b723b48e885a931f39393",
+          "bytes": 35960
+        },
+        "src/lib.rs": {
+          "path": "src/lib.rs",
+          "sha256": "983946c058ff8186a3b98effe6ee617a15de63020d79c904df55fdd9926b10ab",
+          "bytes": 23381
+        },
+        "src/model/openvino.rs": {
+          "path": "src/model/openvino.rs",
+          "sha256": "b77c4239198ec1755c53b368b31406bd8193d49df141501db96c07494f8d32a8",
+          "bytes": 11352
+        },
+        "src/model.rs": {
+          "path": "src/model.rs",
+          "sha256": "bf7d17bb0c7a4545894c0a975f70f046dc718dfc612c6d5128122569c938feb4",
+          "bytes": 17816
+        },
+        "src/session.rs": {
+          "path": "src/session.rs",
+          "sha256": "45a911d9ff6a2d8f83b8837b7574a1dfa5d73716de04821e2b3f91b62c5a3752",
+          "bytes": 32467
+        },
+        "Cargo.toml": {
+          "path": "Cargo.toml",
+          "sha256": "942ccbef87b870f5d33504d1bbcf461216cc928c7fd08afdc9fa662d69868f4d",
+          "bytes": 1102
+        },
+        "Cargo.lock": {
+          "path": "Cargo.lock",
+          "sha256": "4c73f490cbe0ef49dc4788bf4fae45b7422fd2c5f2cf5ea417d19e3f588126fd",
+          "bytes": 30175
+        },
+        "scripts/train_ranker.py": {
+          "path": "scripts/train_ranker.py",
+          "sha256": "67b83f7fdebcc790dc7d0e1c8a40c76eeb10e0e038bff8165eddc67fc31a2d30",
+          "bytes": 26156
+        },
+        "scripts/pretrain_model.py": {
+          "path": "scripts/pretrain_model.py",
+          "sha256": "f444073fab402df849fa5ca74de43e5eaec9ddb5c182a968cfb6f702990a5bb4",
+          "bytes": 19001
+        },
+        "scripts/training-requirements.txt": {
+          "path": "scripts/training-requirements.txt",
+          "sha256": "d41e9c63347f5e6bba9bc2b71b48f39b6675a6a595c07684fc667aada069eeb1",
+          "bytes": 185
+        },
+        "vendor/chinese-ime-lm/src/lib.rs": {
+          "path": "vendor/chinese-ime-lm/src/lib.rs",
+          "sha256": "f77b9d6d8b38969cef0d50a5d26afdb64efe418aef69d1e177373492ba25f4db",
+          "bytes": 47852
+        },
+        "vendor/chinese-ime-training/neural/model.py": {
+          "path": "vendor/chinese-ime-training/neural/model.py",
+          "sha256": "0b7fb41aa8a4356fa7757aa1b9e84d5022fa33a5436e695dcc1116b0d34c1f9b",
+          "bytes": 4393
+        },
+        "vendor/chinese-ime-training/neural/initialize.py": {
+          "path": "vendor/chinese-ime-training/neural/initialize.py",
+          "sha256": "160af2dc697660b74ab74031283f768c9ec26fb14ed54d4ed979ab49f9ae2de5",
+          "bytes": 2421
+        }
+      },
+      "learning": "system learning disabled; only explicitly supplied training files are read"
+    }
+  },
+  "sources": [
+    {
+      "source": "naturalconv",
+      "repository": {
+        "platform": "huggingface",
+        "id": "xywang1/NaturalConv",
+        "url": "https://huggingface.co/datasets/xywang1/NaturalConv"
+      },
+      "revision": "adb38574e8014ada1d8404247167582e76b22d05",
+      "declared_license": "not declared in dataset card; retain original source",
+      "data_card": "https://huggingface.co/datasets/xywang1/NaturalConv/tree/adb38574e8014ada1d8404247167582e76b22d05",
+      "citation": "Wang et al. (2021), NaturalConv: A Chinese Dialogue Dataset Towards Multi-turn Topic-driven Conversation; https://arxiv.org/abs/2103.02548",
+      "files": [
+        {
+          "path": "data/cache/retrain-20261021/sources/naturalconv-dialog.json",
+          "sha256": "0aed101b0f295f87da8d27c3fb4eb62955488b7116c9a9c63c929f65656c195a",
+          "bytes": 51726524,
+          "url": "https://huggingface.co/datasets/xywang1/NaturalConv/resolve/adb38574e8014ada1d8404247167582e76b22d05/dialog_release.json"
+        }
+      ],
+      "corpus_splits": {
+        "train": {
+          "paragraphs": 7608,
+          "characters": 1999999
+        },
+        "dev": {
+          "paragraphs": 3096,
+          "characters": 831444
+        },
+        "holdout": {
+          "paragraphs": 2833,
+          "characters": 756294
+        }
+      },
+      "training_character_coverage": {
+        "characters": 1999999,
+        "distinct_han": 3766,
+        "observed3500": 3147,
+        "observed6500": 3729,
+        "observed8105": 3752
+      },
+      "ranking_cases": {
+        "train": 4000,
+        "dev": 440,
+        "holdout": 1000
+      }
+    },
+    {
+      "source": "cped",
+      "repository": {
+        "platform": "github",
+        "id": "scutcyr/CPED",
+        "url": "https://github.com/scutcyr/CPED"
+      },
+      "revision": "1e4b81c28a123f22387e06664f37e5dc9322380f",
+      "declared_license": "Apache-2.0 repository license; original TV dialogue source retained",
+      "data_card": "https://github.com/scutcyr/CPED/tree/1e4b81c28a123f22387e06664f37e5dc9322380f",
+      "citation": "Chen et al. (2022), CPED: A Large-Scale Chinese Personalized and Emotional Dialogue Dataset for Conversational AI; text only, no speaker or visual annotations",
+      "files": [
+        {
+          "path": "data/cache/retrain-20261021/sources/cped-train.csv",
+          "sha256": "7bce6a11f0bf0ac353d28e96f6cfa03ff5e83b95810647abb55d18ff7299e487",
+          "bytes": 13993864,
+          "url": "https://raw.githubusercontent.com/scutcyr/CPED/1e4b81c28a123f22387e06664f37e5dc9322380f/data/CPED/train_split.csv"
+        },
+        {
+          "path": "data/cache/retrain-20261021/sources/cped-valid.csv",
+          "sha256": "f434a04d21640bb38c849f3e9598c2b7b2fbdb49be6a7365b2ae016019bd389b",
+          "bytes": 1672923,
+          "url": "https://raw.githubusercontent.com/scutcyr/CPED/1e4b81c28a123f22387e06664f37e5dc9322380f/data/CPED/valid_split.csv"
+        },
+        {
+          "path": "data/cache/retrain-20261021/sources/cped-test.csv",
+          "sha256": "a4bcde678438ba1f95224d8e772e40f1f1df7c72f348796b3fafd421c2443a53",
+          "bytes": 4137142,
+          "url": "https://raw.githubusercontent.com/scutcyr/CPED/1e4b81c28a123f22387e06664f37e5dc9322380f/data/CPED/test_split.csv"
+        }
+      ],
+      "corpus_splits": {
+        "train": {
+          "paragraphs": 8060,
+          "characters": 863955
+        },
+        "dev": {
+          "paragraphs": 917,
+          "characters": 101447
+        },
+        "holdout": {
+          "paragraphs": 2751,
+          "characters": 252171
+        }
+      },
+      "training_character_coverage": {
+        "characters": 863955,
+        "distinct_han": 3476,
+        "observed3500": 3063,
+        "observed6500": 3465,
+        "observed8105": 3471
+      },
+      "ranking_cases": {
+        "train": 4000,
+        "dev": 440,
+        "holdout": 750
+      },
+      "license_url": "https://raw.githubusercontent.com/scutcyr/CPED/1e4b81c28a123f22387e06664f37e5dc9322380f/LICENSE"
+    },
+    {
+      "source": "lccc",
+      "repository": {
+        "platform": "huggingface",
+        "id": "thu-coai/lccc",
+        "url": "https://huggingface.co/datasets/thu-coai/lccc"
+      },
+      "revision": "81d998c10513b24cd560be3448d693e80d753fdc",
+      "declared_license": "MIT",
+      "data_card": "https://huggingface.co/datasets/thu-coai/lccc/raw/9022ba27075f75c2f59d57d7fa5f42e8d1151aec/README.md",
+      "citation": "Wang, Yida et al. (2020), A Large-Scale Chinese Short-Text Conversation Dataset, NLPCC; https://arxiv.org/abs/2008.03946",
+      "files": [
+        {
+          "path": "data/cache/retrain-20261021/sources/lccc-train-00000.parquet",
+          "sha256": "1e8bbfff077ec1a7c74672d156f93b1d443ed8f240383ac3a317eb2afa6a5e5f",
+          "bytes": 339463404,
+          "url": "https://huggingface.co/datasets/thu-coai/lccc/resolve/81d998c10513b24cd560be3448d693e80d753fdc/base/lccc-train-00000-of-00002.parquet"
+        }
+      ],
+      "corpus_splits": {
+        "train": {
+          "paragraphs": 297916,
+          "characters": 15000000
+        },
+        "dev": {
+          "paragraphs": 4339,
+          "characters": 224992
+        },
+        "holdout": {
+          "paragraphs": 4470,
+          "characters": 225000
+        }
+      },
+      "training_character_coverage": {
+        "characters": 15000000,
+        "distinct_han": 5431,
+        "observed3500": 3437,
+        "observed6500": 5156,
+        "observed8105": 5258
+      },
+      "ranking_cases": {
+        "train": 24000,
+        "dev": 450,
+        "holdout": 0
+      }
+    },
+    {
+      "source": "wiki",
+      "repository": {
+        "platform": "huggingface",
+        "id": "wikimedia/wikipedia",
+        "url": "https://huggingface.co/datasets/wikimedia/wikipedia"
+      },
+      "revision": "b04c8d1ceb2f5cd4588862100d08de323dccfbaa",
+      "declared_license": "CC-BY-SA-3.0 and GFDL (version not specified in card)",
+      "data_card": "https://huggingface.co/datasets/wikimedia/wikipedia/raw/b04c8d1ceb2f5cd4588862100d08de323dccfbaa/README.md",
+      "citation": "Wikimedia Wikipedia 2023-11-01 Chinese dump; original article id/url/title retained in raw Parquet",
+      "files": [
+        {
+          "path": "data/cache/retrain-20261021/sources/wiki-train-00000.parquet",
+          "sha256": "853ddf4a138c792ad7386d6de831788f96326c03e1e3349f7a315498392e8b56",
+          "bytes": 587109027,
+          "url": "https://huggingface.co/datasets/wikimedia/wikipedia/resolve/b04c8d1ceb2f5cd4588862100d08de323dccfbaa/20231101.zh/train-00000-of-00006.parquet"
+        },
+        {
+          "path": "data/cache/retrain-20261021/sources/wiki-train-00002.parquet",
+          "sha256": "ec8f6c0dd1418b8fcd454278fb4f2bc7cd0ce8312f29c80b672533942601338f",
+          "bytes": 126796358,
+          "url": "https://huggingface.co/datasets/wikimedia/wikipedia/resolve/b04c8d1ceb2f5cd4588862100d08de323dccfbaa/20231101.zh/train-00002-of-00006.parquet"
+        }
+      ],
+      "corpus_splits": {
+        "train": {
+          "paragraphs": 464945,
+          "characters": 25000000
+        },
+        "dev": {
+          "paragraphs": 3685,
+          "characters": 374990
+        },
+        "holdout": {
+          "paragraphs": 3819,
+          "characters": 375000
+        }
+      },
+      "training_character_coverage": {
+        "characters": 25000000,
+        "distinct_han": 8976,
+        "observed3500": 3497,
+        "observed6500": 6212,
+        "observed8105": 7070
+      },
+      "ranking_cases": {
+        "train": 36000,
+        "dev": 432,
+        "holdout": 0
+      }
+    },
+    {
+      "source": "cqia",
+      "repository": {
+        "platform": "huggingface",
+        "id": "m-a-p/COIG-CQIA",
+        "url": "https://huggingface.co/datasets/m-a-p/COIG-CQIA"
+      },
+      "revision": "8b55868c6168adf86c30e7ca0f782cca1c514297",
+      "declared_license": "More Information Needed; no unified license declared; per-row copyright retained in raw JSONL",
+      "data_card": "https://huggingface.co/datasets/m-a-p/COIG-CQIA/raw/8b55868c6168adf86c30e7ca0f782cca1c514297/README.md",
+      "citation": "Bai, Yuelin et al. (2024), COIG-CQIA: Quality is All You Need for Chinese Instruction Fine-tuning; https://arxiv.org/abs/2403.18058",
+      "files": [
+        {
+          "path": "data/cache/retrain-20261021/sources/cqia-zhihu9.jsonl",
+          "sha256": "3263b3c24c94bdb6ad3b9b547594aa1b5c4d3786fa456780c893af28ca86ab20",
+          "bytes": 7364243,
+          "url": "https://huggingface.co/datasets/m-a-p/COIG-CQIA/resolve/8b55868c6168adf86c30e7ca0f782cca1c514297/zhihu/zhihu_score9.0-10_clean_v10.jsonl"
+        },
+        {
+          "path": "data/cache/retrain-20261021/sources/cqia-zhihu85.jsonl",
+          "sha256": "86e277a63251c019a11360274e76c0d0b0e76b5b2559d7d7fb1a5273e6b4ffa4",
+          "bytes": 3346303,
+          "url": "https://huggingface.co/datasets/m-a-p/COIG-CQIA/resolve/8b55868c6168adf86c30e7ca0f782cca1c514297/zhihu/zhihu_score8.5-9.0_clean_v4.jsonl"
+        },
+        {
+          "path": "data/cache/retrain-20261021/sources/cqia-zhihu8.jsonl",
+          "sha256": "2dd9954e8ad41eee9b0c0823938f299472779b0757234a237c56f83d1fac6a86",
+          "bytes": 3236988,
+          "url": "https://huggingface.co/datasets/m-a-p/COIG-CQIA/resolve/8b55868c6168adf86c30e7ca0f782cca1c514297/zhihu/zhihu_score8.0-8.5_clean_v3.jsonl"
+        },
+        {
+          "path": "data/cache/retrain-20261021/sources/cqia-wikihow.jsonl",
+          "sha256": "ec172b8616c589bc28b5be5c77ae4b0659e401184848127517bc8352497d57ca",
+          "bytes": 11519024,
+          "url": "https://huggingface.co/datasets/m-a-p/COIG-CQIA/resolve/8b55868c6168adf86c30e7ca0f782cca1c514297/wikihow/wikihow.jsonl"
+        },
+        {
+          "path": "data/cache/retrain-20261021/sources/cqia-zgbk.jsonl",
+          "sha256": "d1e3dac5eeb90541dbe39a20629eb2e5f7315f19796da7bba308b92e905591ed",
+          "bytes": 5653878,
+          "url": "https://huggingface.co/datasets/m-a-p/COIG-CQIA/resolve/8b55868c6168adf86c30e7ca0f782cca1c514297/wiki/zgbk.jsonl"
+        },
+        {
+          "path": "data/cache/retrain-20261021/sources/cqia-book-introduce.jsonl",
+          "sha256": "3fb7401db5a8d21423ce8befabfd22ed67e9d43d73d88504f20fe471bf463e0b",
+          "bytes": 718502,
+          "url": "https://huggingface.co/datasets/m-a-p/COIG-CQIA/resolve/8b55868c6168adf86c30e7ca0f782cca1c514297/douban/book_introduce.jsonl"
+        },
+        {
+          "path": "data/cache/retrain-20261021/sources/cqia-book-reviews.jsonl",
+          "sha256": "c72d6b7c88f233846aeda9576dc0c1a9d7cc1e0b5e4e5626e7fa4408c7352648",
+          "bytes": 464357,
+          "url": "https://huggingface.co/datasets/m-a-p/COIG-CQIA/resolve/8b55868c6168adf86c30e7ca0f782cca1c514297/douban/book_reviews.jsonl"
+        },
+        {
+          "path": "data/cache/retrain-20261021/sources/cqia-movie-reviews.jsonl",
+          "sha256": "60ba054a3973e9301316efaa1525b27202e5dc8ef5c6878acc9813c067c13336",
+          "bytes": 918882,
+          "url": "https://huggingface.co/datasets/m-a-p/COIG-CQIA/resolve/8b55868c6168adf86c30e7ca0f782cca1c514297/douban/movie_reviews.jsonl"
+        },
+        {
+          "path": "data/cache/retrain-20261021/sources/cqia-tv-reviews.jsonl",
+          "sha256": "db5cb354a8db1447d54ce2878b5b114e52b3fd02707e4b1c622d4dad6f52bc57",
+          "bytes": 686151,
+          "url": "https://huggingface.co/datasets/m-a-p/COIG-CQIA/resolve/8b55868c6168adf86c30e7ca0f782cca1c514297/douban/tv_reviews.jsonl"
+        }
+      ],
+      "corpus_splits": {
+        "train": {
+          "paragraphs": 120931,
+          "characters": 8406765
+        },
+        "dev": {
+          "paragraphs": 1501,
+          "characters": 116283
+        },
+        "holdout": {
+          "paragraphs": 1507,
+          "characters": 124448
+        }
+      },
+      "training_character_coverage": {
+        "characters": 8406765,
+        "distinct_han": 6129,
+        "observed3500": 3494,
+        "observed6500": 5656,
+        "observed8105": 5869
+      },
+      "ranking_cases": {
+        "train": 10000,
+        "dev": 115,
+        "holdout": 0
+      }
+    },
+    {
+      "source": "tnews",
+      "repository": {
+        "platform": "huggingface",
+        "id": "clue/clue",
+        "url": "https://huggingface.co/datasets/clue/clue"
+      },
+      "revision": "28178267a609dd08bdc703dd6c931dfc2c2f4431",
+      "declared_license": "unknown",
+      "data_card": "https://huggingface.co/datasets/clue/clue/raw/28178267a609dd08bdc703dd6c931dfc2c2f4431/README.md",
+      "citation": "Xu, Liang et al. (2020), CLUE: A Chinese Language Understanding Evaluation Benchmark; https://arxiv.org/abs/2004.05986",
+      "files": [
+        {
+          "path": "data/cache/retrain-20261021/sources/tnews-train.parquet",
+          "sha256": "57ad8b1a5a6a4120a283468f5a828a2702b742139a1878e1edcd7b8b59eec5de",
+          "bytes": 3399930,
+          "url": "https://huggingface.co/datasets/clue/clue/resolve/28178267a609dd08bdc703dd6c931dfc2c2f4431/tnews/train-00000-of-00001.parquet"
+        }
+      ],
+      "corpus_splits": {
+        "train": {
+          "paragraphs": 45524,
+          "characters": 1000000
+        },
+        "dev": {
+          "paragraphs": 631,
+          "characters": 14674
+        },
+        "holdout": {
+          "paragraphs": 574,
+          "characters": 13431
+        }
+      },
+      "training_character_coverage": {
+        "characters": 1000000,
+        "distinct_han": 4520,
+        "observed3500": 3379,
+        "observed6500": 4424,
+        "observed8105": 4478
+      },
+      "ranking_cases": {
+        "train": 2000,
+        "dev": 40,
+        "holdout": 0
+      }
+    }
+  ],
+  "data_provenance": {
+    "source_metadata": {
+      "path": "results/retrain-20261021/publication-data-sources.json",
+      "sha256": "1cc2232ab4a999968c4621f878eb8ad31df01ee08cd0d20a4a2c4f5d2c58d076",
+      "bytes": 41485
+    },
+    "corpus": {
+      "recipe": {
+        "path": "data/cache/retrain-20261021/corpus/data-recipe.json",
+        "sha256": "c43ca309b1c8db23094967885ec873da84049c37a1d9879e91ca8a2d624c460b",
+        "bytes": 27890
+      },
+      "builder": {
+        "path": "scripts/prepare_general_corpus.py",
+        "sha256": "c8a93f8a7ece52932cc0c01d556918a61ddad249d09dab26ac79c299eec95ad9",
+        "bytes": 37454
+      },
+      "converter": {
+        "package": "OpenCC",
+        "version": "1.4.2",
+        "configuration": "t2s"
+      },
+      "rules": {
+        "normalization": "Unicode NFC then OpenCC t2s; preserve Chinese punctuation; dedup canonical applies NFKC; remove segmented-Han spaces, markdown styling, controls; preserve Latin token spaces; join hard wraps between long adjacent prose lines without terminal punctuation",
+        "source_groups": "whole LCCC conversation canonical hash; Wikipedia page id; CQIA source-domain-namespaced original qid or canonical question hash, all distinct answers kept; TNEWS idx; NaturalConv document_id across distinct dialog_id conversations; CPED TV_ID across distinct Dialogue_ID conversations; split before cleaning and paragraph segmentation; frozen new source assignments in source-groups.json",
+        "dialogues": "clean/filter each utterance separately; retain order within one conversation, preserve existing ending punctuation, otherwise append Chinese full stop; concatenate only that conversation, then segment at <=384 characters; CPED sort by Utterance_ID; no cross-conversation concatenation",
+        "split": "BLAKE2b(source NUL split_group) first32bits modulo10000: old sources dev[0,150), holdout[150,300), train otherwise; NaturalConv dev[0,1000), holdout[1000,2000), train otherwise; CPED official train/valid/test files, disjoint TV_ID; hash-shuffled source-stratified character budgets",
+        "observed_source_exclusion": "NaturalConv document_id 0..6 excluded entirely because source research observed them before split freezing",
+        "dedup": "global canonical exact paragraphs >=12 characters; for >=64 characters query >=2 shared keys among12 bottom-hash16-character shingles and verify length ratio>=0.9 plus shared4-character-shingle multiset count divided by larger total>=0.9; digit content retained; training processed before heldouts",
+        "short_common_language": "normalized paragraphs shorter than12 characters retained only in train, at most32 occurrences globally; no short paragraph crosses into heldout",
+        "previous_training_overlap": "Fresh NaturalConv/CPED dev and holdout paragraphs excluded against recorded previous train.txt using the same exact/near canonical paragraph rules, independently of model/candidate results; no previous-training exclusion for new train or old-source regression splits",
+        "limits": {
+          "naturalconv": 2000000,
+          "cped": 1000000,
+          "lccc": 15000000,
+          "wiki": 25000000,
+          "cqia": 12000000,
+          "tnews": 1000000
+        },
+        "paragraph_max_characters": 384,
+        "filter": "no URL/contact/advertising/code-heavy/low-Han (<45% of letters and digits) paragraphs or >=6 repeated-character runs; navigation headings removed; no medical-vocabulary exclusion",
+        "eval_exclusion": "all public data/eval/*.jsonl plus explicit repeatable --exclude paths: context+gold canonical sequences >=6 characters excluded as substrings from all splits, without model scoring holdout; short common words are not globally forbidden"
+      },
+      "splits": {
+        "train": {
+          "path": "data/cache/retrain-20261021/corpus/train.txt",
+          "sha256": "49a91c17f47cea9a96c01f9b6ddba817004ff0f243552cbb76855efc0e2c7e94",
+          "bytes": 149717977,
+          "paragraphs": 944984,
+          "characters": 52270719,
+          "sources": {
+            "lccc": {
+              "paragraphs": 297916,
+              "characters": 15000000
+            },
+            "wiki": {
+              "paragraphs": 464945,
+              "characters": 25000000
+            },
+            "tnews": {
+              "paragraphs": 45524,
+              "characters": 1000000
+            },
+            "naturalconv": {
+              "paragraphs": 7608,
+              "characters": 1999999
+            },
+            "cqia": {
+              "paragraphs": 120931,
+              "characters": 8406765
+            },
+            "cped": {
+              "paragraphs": 8060,
+              "characters": 863955
+            }
+          }
+        },
+        "dev": {
+          "path": "data/cache/retrain-20261021/corpus/dev.txt",
+          "sha256": "f8832da8837315e76027bc8c557724ce538cdccc7f0ed32189e38ca2e7d2d583",
+          "bytes": 4855128,
+          "paragraphs": 14169,
+          "characters": 1663830,
+          "sources": {
+            "naturalconv": {
+              "paragraphs": 3096,
+              "characters": 831444
+            },
+            "lccc": {
+              "paragraphs": 4339,
+              "characters": 224992
+            },
+            "wiki": {
+              "paragraphs": 3685,
+              "characters": 374990
+            },
+            "cped": {
+              "paragraphs": 917,
+              "characters": 101447
+            },
+            "tnews": {
+              "paragraphs": 631,
+              "characters": 14674
+            },
+            "cqia": {
+              "paragraphs": 1501,
+              "characters": 116283
+            }
+          }
+        },
+        "holdout": {
+          "path": "data/cache/retrain-20261021/corpus/holdout.txt",
+          "sha256": "df39155079c480d8ca5fda91e01cfc72d4158a5d42f74ef40c1389a1d8f45ddf",
+          "bytes": 5104199,
+          "paragraphs": 15954,
+          "characters": 1746344,
+          "sources": {
+            "lccc": {
+              "paragraphs": 4470,
+              "characters": 225000
+            },
+            "cped": {
+              "paragraphs": 2751,
+              "characters": 252171
+            },
+            "wiki": {
+              "paragraphs": 3819,
+              "characters": 375000
+            },
+            "naturalconv": {
+              "paragraphs": 2833,
+              "characters": 756294
+            },
+            "tnews": {
+              "paragraphs": 574,
+              "characters": 13431
+            },
+            "cqia": {
+              "paragraphs": 1507,
+              "characters": 124448
+            }
+          }
+        }
+      },
+      "document_stream": {
+        "path": "data/cache/retrain-20261021/corpus/documents.jsonl",
+        "sha256": "98b2f29735a93dd7fb71da1efa1976c85891f73972252d38e8bb26ef02686083",
+        "bytes": 281415524,
+        "rows": 975107
+      },
+      "paragraph_map": {
+        "path": "data/cache/retrain-20261021/corpus/paragraph-map.jsonl",
+        "sha256": "f1da687a6475076d2d8fb1d3874957b8c60876c70d04c310a10186a233035d86",
+        "bytes": 126445370
+      },
+      "frozen_source_groups": {
+        "path": "data/cache/retrain-20261021/corpus/source-groups.json",
+        "sha256": "4103a87d674777e0cf3c6e06e2529094bbfcd9fdf8afcdc35d859ab247dad38b",
+        "bytes": 135949,
+        "assigned_groups": {
+          "naturalconv": {
+            "train": 5221,
+            "dev": 665,
+            "holdout": 607
+          },
+          "cped": {
+            "train": 26,
+            "dev": 5,
+            "holdout": 9
+          }
+        },
+        "selected_groups": {
+          "train": {
+            "naturalconv": 3328,
+            "cped": 26
+          },
+          "dev": {
+            "naturalconv": 665,
+            "cped": 5
+          },
+          "holdout": {
+            "cped": 9,
+            "naturalconv": 607
+          }
+        },
+        "selected_documents": {
+          "train": {
+            "naturalconv": 4831,
+            "cped": 8045
+          },
+          "dev": {
+            "naturalconv": 1993,
+            "cped": 917
+          },
+          "holdout": {
+            "cped": 2751,
+            "naturalconv": 1824
+          }
+        }
+      },
+      "existing_evaluation_exclusions": {
+        "files": [
+          {
+            "path": "data/eval/common-words-v1.jsonl",
+            "sha256": "97d183e54d232bba0b2f783f8002c4bb297e486960a927a6b8fa9ca17e4ae4c7",
+            "bytes": 3191
+          },
+          {
+            "path": "data/eval/context-dev-v2.jsonl",
+            "sha256": "2a25c4e845e25c87aa882f2fda9bf985daf0d6f58eb8d1008dc205d240db5652",
+            "bytes": 7085
+          },
+          {
+            "path": "data/eval/replay-v3-annotations.jsonl",
+            "sha256": "867572973182a32a47f301634414863fe7518883aa91e2b7fd27e6d801590574",
+            "bytes": 1953626
+          },
+          {
+            "path": "data/eval/replay-v3-dev.jsonl",
+            "sha256": "92c09af968257439223e7bbede90b42ab63d5d3aed496b398acd98e14b5d65b0",
+            "bytes": 547630
+          },
+          {
+            "path": "data/eval/replay-v3-test.jsonl",
+            "sha256": "9fbd776bc776cc8979d0ef076ac96a71217000b5469ef7bc051bd198643c140f",
+            "bytes": 1098492
+          },
+          {
+            "path": "data/cache/general-model-20261021/ranking-holdout.jsonl",
+            "sha256": "74119f1f6ed81aa4e46fde743d8a189971a4abb2c2fc0544f9211c7d40e4042b",
+            "bytes": 349916
+          }
+        ],
+        "canonical_context_gold_sequences": 3879
+      },
+      "previous_training_exclusion": {
+        "path": "data/cache/general-model-20261021/corpus/train.txt",
+        "sha256": "64b3bfcde1cdd1fea29d8033fe4316c93aeddf9752e20ed5e55d2b0d68833f1d",
+        "bytes": 223471264,
+        "indexed_fresh_paragraphs": 9657,
+        "matching_fresh_paragraphs": 0
+      }
+    },
+    "vocabulary": {
+      "size": 9358,
+      "shared_by_specs": {
+        "compact": {
+          "path": "data/cache/retrain-20261021/corpus/compact-spec.json",
+          "sha256": "d63c22d0672926d11fd851292199e5c0a759b16403593785ef9a86c5f6ddf189",
+          "bytes": 103322,
+          "config": {
+            "vocab": 9358,
+            "n_layer": 6,
+            "n_head": 4,
+            "n_embd": 192,
+            "context": 64,
+            "dropout": 0.1
+          }
+        },
+        "small": {
+          "path": "data/cache/retrain-20261021/corpus/small-spec.json",
+          "sha256": "59be84aa3c3fd9678baaf47d82aa8e5cef3394fccab44d86ad4514f31b4a13f2",
+          "bytes": 103322,
+          "config": {
+            "vocab": 9358,
+            "n_layer": 6,
+            "n_head": 4,
+            "n_embd": 256,
+            "context": 64,
+            "dropout": 0.1
+          }
+        },
+        "large": {
+          "path": "data/cache/retrain-20261021/corpus/large-spec.json",
+          "sha256": "b5c1e25128b8f76c3d837bed7daeb1bd65c73fa4d7bba67c52f1a331e4e2d9e6",
+          "bytes": 103322,
+          "config": {
+            "vocab": 9358,
+            "n_layer": 8,
+            "n_head": 8,
+            "n_embd": 448,
+            "context": 64,
+            "dropout": 0.1
+          }
+        }
+      },
+      "shared_vocab_sha256": "cb6c36b34dead9348548fff233af19a318aed3c61b8b49b728faa0de904439c7",
+      "shared_vocab_sha256_encoding": "UTF-8 JSON array, ensure_ascii=false, compact separators comma/colon; exact list order retained",
+      "coverage": {
+        "required3500": 3500,
+        "required6500": 6500,
+        "required8105": 8105,
+        "dictionary_single_characters": 8183,
+        "dictionary_single_characters_covered": 8183,
+        "train_observed3500": 3500,
+        "train_observed6500": 6342,
+        "train_observed8105": 7260,
+        "train_atleast100_3500": 3342,
+        "train_atleast100_6500": 4022,
+        "train_atleast100_8105": 4042
+      },
+      "coverage_scope": "required counts are vocabulary coverage; train_observed and train_atleast100 counts are frozen training-text frequency coverage, not quality scores",
+      "train_characters": 52270719,
+      "train_unknown_characters": 6236,
+      "train_character_frequencies": {
+        "path": "data/cache/retrain-20261021/corpus/train-character-frequency.json",
+        "sha256": "d6a9a26d02b028a63c18ccf84aa2c70c8e79685d6946ca9edefd43634aa3c7c1",
+        "bytes": 309066
+      },
+      "character_tables": {
+        "1": {
+          "path": "data/cache/retrain-20261021/sources/1.txt",
+          "sha256": "029f543f396d4cee0692570a74f79dd912541f8acd8e3bdbb9e864542cf43ee4",
+          "bytes": 13999
+        },
+        "2": {
+          "path": "data/cache/retrain-20261021/sources/2.txt",
+          "sha256": "4d31f0c7e69baa76b21d827c477dfb33c8fa5de680295adee4ad26af82b5671b",
+          "bytes": 12002
+        },
+        "3": {
+          "path": "data/cache/retrain-20261021/sources/3.txt",
+          "sha256": "9870605c5fa14d652be4d2f2470b96cbfeb818bb03634dcb6343ad5fb03fc8e7",
+          "bytes": 6612
+        }
+      },
+      "dictionary": {
+        "path": "data/dictionaries/8105.dict.yaml",
+        "sha256": "1f9a42b91dea6982baee2551981780271aeffd78876662b9c9f324e56b37b120",
+        "bytes": 115728
+      },
+      "source_oov_all_corpus_splits": {
+        "lccc": {
+          "characters": 15449992,
+          "unknown": 211
+        },
+        "wiki": {
+          "characters": 25749990,
+          "unknown": 5556
+        },
+        "tnews": {
+          "characters": 1028105,
+          "unknown": 21
+        },
+        "naturalconv": {
+          "characters": 3587737,
+          "unknown": 18
+        },
+        "cqia": {
+          "characters": 8647496,
+          "unknown": 692
+        },
+        "cped": {
+          "characters": 1217573,
+          "unknown": 0
+        }
+      }
+    },
+    "ranking": {
+      "format": "yanliu-public-ranking-data-v1",
+      "recipe": {
+        "path": "results/retrain-20261021/ranking-data-recipe.json",
+        "sha256": "cf74d5457c4c45d1c6c82733af5a99dcdd524b1bbc0d4374adf15a13fcff2729",
+        "bytes": 20061
+      },
+      "builder": {
+        "path": "scripts/build_ranking_corpus.py",
+        "sha256": "4d51a03479719e64ffefee7227f85ce7a98b30ce5f4d9f37c49806f8c7b3dab1",
+        "bytes": 17771
+      },
+      "documents": {
+        "path": "data/cache/retrain-20261021/corpus/documents.jsonl",
+        "sha256": "98b2f29735a93dd7fb71da1efa1976c85891f73972252d38e8bb26ef02686083",
+        "bytes": 281415524
+      },
+      "pypinyin_version": "0.55.0",
+      "rules": {
+        "split": "inherit each complete source/group document assignment; never reassign cases",
+        "document_caps": {
+          "train": 4,
+          "dev": 1,
+          "holdout": 1
+        },
+        "lengths": "one train slot each for 1,2,3-4,5-8 characters; dev/holdout slot chosen by SHA256",
+        "sampling": "SHA256(document, paragraph, Han-run offset, slot) fixes cut and length; minimum document-slot hash chooses paragraph/run; independent source-budget hash selects a fixed pool of ceil(1.25 * target) before any pypinyin call; annotate/filter/deduplicate only this pool, retain at most target in original hash order; no adaptive resampling to fill shortfalls",
+        "context": "document-slot hash requests empty context 25% of the time; otherwise preserve 1..32 preceding paragraph characters including punctuation and earlier turns from that conversation; a target may begin at a Han-run boundary when the paragraph already has context; never cross paragraph/conversation boundaries",
+        "pinyin": "pypinyin NORMAL strict on each complete contiguous Han run before target slicing; one lowercase ASCII syllable per target character; automatic polyphonic readings are not human gold",
+        "dedup": "SHA256 of NFKC/casefold/alphanumeric-normalized (input,context,gold), matching the train_ranker input boundary, against recorded existing evaluation and globally across the fixed annotation pools; different substantive contexts of a common word remain eligible",
+        "selection": "public text only; no CLI calls, model scores, candidate filtering or gold injection into recall",
+        "source_groups": "source_group/group_id inherit source:split_group (NaturalConv news document; CPED TV series); document_group identifies the concrete conversation/page/question used for per-document slot limits",
+        "evaluation": "holdout limits select only fresh NaturalConv/CPED; old-source heldouts remain corpus regression data; original spelling and automatic pinyin can be noisy",
+        "source_limits": {
+          "train": {
+            "lccc": 24000,
+            "wiki": 36000,
+            "cqia": 10000,
+            "tnews": 2000,
+            "naturalconv": 4000,
+            "cped": 4000
+          },
+          "dev": {
+            "lccc": 450,
+            "wiki": 450,
+            "cqia": 180,
+            "tnews": 40,
+            "naturalconv": 440,
+            "cped": 440
+          },
+          "holdout": {
+            "lccc": 0,
+            "wiki": 0,
+            "cqia": 0,
+            "tnews": 0,
+            "naturalconv": 1000,
+            "cped": 750
+          }
+        },
+        "annotation_pool_limits": {
+          "train": {
+            "lccc": 30000,
+            "wiki": 45000,
+            "cqia": 12500,
+            "tnews": 2500,
+            "naturalconv": 5000,
+            "cped": 5000
+          },
+          "dev": {
+            "lccc": 563,
+            "wiki": 563,
+            "cqia": 225,
+            "tnews": 50,
+            "naturalconv": 550,
+            "cped": 550
+          },
+          "holdout": {
+            "lccc": 0,
+            "wiki": 0,
+            "cqia": 0,
+            "tnews": 0,
+            "naturalconv": 1250,
+            "cped": 938
+          }
+        }
+      },
+      "existing_evaluation_queries": 4570,
+      "exclusion_files": [
+        {
+          "path": "data/eval/common-words-v1.jsonl",
+          "sha256": "97d183e54d232bba0b2f783f8002c4bb297e486960a927a6b8fa9ca17e4ae4c7",
+          "bytes": 3191
+        },
+        {
+          "path": "data/eval/context-dev-v2.jsonl",
+          "sha256": "2a25c4e845e25c87aa882f2fda9bf985daf0d6f58eb8d1008dc205d240db5652",
+          "bytes": 7085
+        },
+        {
+          "path": "data/eval/replay-v3-annotations.jsonl",
+          "sha256": "867572973182a32a47f301634414863fe7518883aa91e2b7fd27e6d801590574",
+          "bytes": 1953626
+        },
+        {
+          "path": "data/eval/replay-v3-dev.jsonl",
+          "sha256": "92c09af968257439223e7bbede90b42ab63d5d3aed496b398acd98e14b5d65b0",
+          "bytes": 547630
+        },
+        {
+          "path": "data/eval/replay-v3-test.jsonl",
+          "sha256": "9fbd776bc776cc8979d0ef076ac96a71217000b5469ef7bc051bd198643c140f",
+          "bytes": 1098492
+        },
+        {
+          "path": "data/cache/general-model-20261021/ranking-holdout.jsonl",
+          "sha256": "74119f1f6ed81aa4e46fde743d8a189971a4abb2c2fc0544f9211c7d40e4042b",
+          "bytes": 349916
+        }
+      ],
+      "splits": {
+        "train": {
+          "path": "data/cache/retrain-20261021/ranking-train.jsonl",
+          "sha256": "477fcef665c90808cc0623bdde85355e40318c450bf5fb7b35872c9fdb230892",
+          "bytes": 24303199,
+          "cases": 80000,
+          "source": {
+            "lccc": 24000,
+            "wiki": 36000,
+            "cqia": 10000,
+            "tnews": 2000,
+            "naturalconv": 4000,
+            "cped": 4000
+          },
+          "target_length": {
+            "1": 17402,
+            "2": 20515,
+            "3": 11267,
+            "4": 9959,
+            "5": 6675,
+            "6": 5587,
+            "7": 4630,
+            "8": 3965
+          },
+          "context": {
+            "present": 63841,
+            "empty": 16159
+          },
+          "source_groups": {
+            "lccc": 23306,
+            "wiki": 23496,
+            "cqia": 6240,
+            "tnews": 1963,
+            "naturalconv": 2313,
+            "cped": 26
+          },
+          "documents": 61226
+        },
+        "dev": {
+          "path": "data/cache/retrain-20261021/ranking-dev.jsonl",
+          "sha256": "933a31e6a7e19cdbb393b6bca627614c3be14741327f16a1ca7882ef30fc0b04",
+          "bytes": 590952,
+          "cases": 1917,
+          "source": {
+            "lccc": 450,
+            "wiki": 432,
+            "cqia": 115,
+            "tnews": 40,
+            "naturalconv": 440,
+            "cped": 440
+          },
+          "target_length": {
+            "1": 406,
+            "2": 492,
+            "3": 249,
+            "4": 229,
+            "5": 173,
+            "6": 152,
+            "7": 111,
+            "8": 105
+          },
+          "context": {
+            "present": 1532,
+            "empty": 385
+          },
+          "source_groups": {
+            "lccc": 450,
+            "wiki": 432,
+            "cqia": 115,
+            "tnews": 40,
+            "naturalconv": 344,
+            "cped": 5
+          },
+          "documents": 1917
+        },
+        "holdout": {
+          "path": "data/cache/retrain-20261021/ranking-holdout.jsonl",
+          "sha256": "61724a965822faa8da3f9c1dbdbce100c605186e479ec0d9637f363759588ad8",
+          "bytes": 543557,
+          "cases": 1750,
+          "source": {
+            "naturalconv": 1000,
+            "cped": 750
+          },
+          "target_length": {
+            "1": 344,
+            "2": 437,
+            "3": 243,
+            "4": 223,
+            "5": 151,
+            "6": 151,
+            "7": 103,
+            "8": 98
+          },
+          "context": {
+            "present": 1451,
+            "empty": 299
+          },
+          "source_groups": {
+            "lccc": 0,
+            "wiki": 0,
+            "cqia": 0,
+            "tnews": 0,
+            "naturalconv": 534,
+            "cped": 9
+          },
+          "documents": 1750
+        }
+      }
+    },
+    "quality_and_limits": {
+      "train_only_sample_audit": {
+        "naturalconv": {
+          "sample": "results/retrain-20261021/corpus-naturalconv-training-sample.jsonl",
+          "sample_sha256": "e95c8439fc4f6b8bd3cbd2b72b9e31723b787a028421e60f38a92142088d9f82",
+          "conversations": 12,
+          "utterances": 242,
+          "characters": 4503,
+          "review": "13 clear issues: 6 near/homophone typos, 2 的/得 errors, 5 expression issues; 2 further suspected issues; 9 conversations affected. Sports 8/12, frequent greetings; no marketing observed.",
+          "decision": "at most 2M training characters; preserve original wording; spoken-language supplement; no inference of corpus-wide error rate"
+        },
+        "cped": {
+          "sample": "results/retrain-20261021/corpus-cped-training-sample.jsonl",
+          "sample_sha256": "303e73f7551d74422ba67ac3402c76709880b86016f1765c0182b552fbd267c6",
+          "conversations": 12,
+          "utterances": 123,
+          "characters": 980,
+          "han_characters": 950,
+          "review": "No clear spelling errors or marketing observed in fixed train sample; everyday family/school/work topics. Subtitle segmentation and interrupted speech retained in the original dialogue order.",
+          "decision": "keep all eligible official training dialogues within 1M-character cap; raw train 790970 characters; no inference that corpus is free of errors"
+        },
+        "boundaries": "Both reviews use train-only fixed samples. No heldout correction, model/recall filtering, private data or system learning."
+      },
+      "recipe_quality_notes": {
+        "naturalconv": "Fixed training-only sample: 12 conversations, 242 utterances, 4503 characters; human review found 13 clear issues (6 near/homophone typos, 2 的/得 errors, 5 expression issues) plus 2 suspected issues, affecting 9 conversations; sports 8/12, frequent greetings, no marketing observed. This sample does not estimate the corpus-wide error rate. Limit to 2M train characters as a small spoken-language supplement; do not correct source text or treat automatic heldout labels as clean human gold. Audit sample: results/retrain-20261021/corpus-naturalconv-training-sample.jsonl, SHA256 e95c8439fc4f6b8bd3cbd2b72b9e31723b787a028421e60f38a92142088d9f82.",
+        "cqia": "Only answer_from=human; exclude xhs marketing source. Keep all distinct human answers to the same namespaced question; deduplicate body text after grouping.",
+        "fresh_evaluation": "Only NaturalConv and CPED are fresh source holdouts; old sources are regression. Automatic pinyin and original spelling can be noisy; never filter by recall/model results."
+      },
+      "automatic_pinyin": "pypinyin 0.55.0 automatically annotates full contiguous Han runs before target slicing. Polyphonic readings and source spelling may be wrong; these labels are not human gold.",
+      "fresh_source_evaluation": "Only NaturalConv and CPED form the fresh ranking holdout. LCCC, Wikipedia, COIG-CQIA and TNEWS text holdouts are old-source regression data.",
+      "cped_independent_holdout_groups": {
+        "unit": "TV_ID",
+        "groups": 9,
+        "ranking_cases": 750,
+        "limitation": "750 CPED ranking cases come from only 9 independent TV-series groups; case count is not the number of independent source groups."
+      },
+      "no_performance_claim": "Structural integrity, byte identity, vocabulary coverage and the recorded train-only sample review do not establish runtime candidate quality, linguistic label accuracy or model performance."
+    },
+    "integrity_evidence": {
+      "files": [
+        {
+          "path": "results/retrain-20261021/data-integrity.json",
+          "sha256": "0aeaaa9b4c49d340f501504fca939ec285018a401559d1059887f4542b5ccbd2",
+          "bytes": 3449
+        },
+        {
+          "path": "results/retrain-20261021/data-ranking-integrity.json",
+          "sha256": "51372e49592367e223a29788ecb2be05b18b7b26d424e28784594ecea96edb95",
+          "bytes": 1347
+        },
+        {
+          "path": "results/retrain-20261021/data-source-inventory.json",
+          "sha256": "79fd56511a427ed38547334a44f00f34a7373e7194c6f3c36d4b9fb210ba2c46",
+          "bytes": 2097
+        },
+        {
+          "path": "results/retrain-20261021/data-quality-audit.json",
+          "sha256": "99cddda16a13f169a45e47abf80ae26194d6936744a479a5e208706880380f10",
+          "bytes": 1414
+        },
+        {
+          "path": "results/retrain-20261021/training-data-checks.json",
+          "sha256": "117ab6615fe599f6e7a18676790a07f0ca5777a8b1128cb3f18a10abe77b1652",
+          "bytes": 1440
+        }
+      ],
+      "corpus_checks": {
+        "split_text_hashes_match_document_stream": true,
+        "source_counts_match_recipe": true,
+        "train_frequencies_match_actual_text": true,
+        "shared_vocab_and_requested_configs": true,
+        "new_source_group_cross_split_overlap": 0,
+        "naturalconv_observed_groups_0_through_6": 0,
+        "scope": "No model or decoder calls. Structural/source/character evidence only; does not establish linguistic accuracy of automatic pinyin."
+      },
+      "ranking_checks": {
+        "train_ranker_normalized_overlap_check": "all three split pairs passed",
+        "duplicate_case_ids": 0,
+        "duplicate_normalized_queries": 0,
+        "recorded_exclusion_query_matches": 0,
+        "case_source_groups_inherit_frozen_assignments": true,
+        "per_document_caps_passed": true,
+        "fresh_holdout_only_new_sources": true,
+        "linguistic_limit": "automatic pypinyin supervision; source typos/polyphonic annotation can be wrong; no model/recall filtering"
+      }
+    }
+  },
+  "metrics": {
+    "scope": "Development data used for checkpoint selection; not untouched generalization or natural-user typing accuracy.",
+    "evidence": {
+      "path": "results/retrain-20261021/quality-dev/large-summary.json",
+      "sha256": "ece4925751025f44146f8d0b8ec633817e305e57afcccd97cb052a20040bc99b",
+      "bytes": 593341
+    },
+    "definitions": {
+      "denominator": "Every input row, including no recall and gold outside the promoted shortlist; no filtering",
+      "group": "Explicit group_id from ranking-dev.jsonl; each group has equal weight and its rows have equal weight inside the group",
+      "source": "source_group prefix before colon, checked against the existing bucket prefix",
+      "context": "nonempty context versus empty context, checked against existing bucket suffix",
+      "rank": "CLI full-input gold match excluding Completion",
+      "rescues_breakages": "Top1 transitions for named before/after reports; all IDs/ranks retained. Raw CLI metrics rescues/breakages remain static-relative. Top5/recall transitions use the same full denominator.",
+      "group_buckets": "Each present explicit group_id has equal weight, and rows have equal weight inside its group; source-context buckets can contain subsets of a group.",
+      "recall": "Full-input non-Completion gold in actual bounded candidate list; missing recall remains in all applicable row/group denominators."
+    },
+    "selection": {
+      "epoch": 1,
+      "criterion": "actual CLI int8 development group-mean top1; ties choose earliest epoch",
+      "selected_model": {
+        "path": "results/retrain-20261021/large-ranking/epoch01-int8.safetensors",
+        "sha256": "724d1dad100a98c799d526b0c699d5f3eccf0f995d53bd5634ad98a0cdcdf7b1"
+      },
+      "initial_group_top1_fraction": [
+        17580649067,
+        26415358200
+      ],
+      "selected_group_top1_fraction": [
+        5907093833,
+        8805119400
+      ],
+      "initial_comparison_verified_against_raw_reports": true,
+      "optimizer_steps": 3334,
+      "compact_comparator_epoch": 1
+    },
+    "all_development_rows": {
+      "static": {
+        "n": 1917,
+        "groups": 1386,
+        "top1": {
+          "count": 970,
+          "rate": 0.5059989567031821,
+          "fraction": [
+            970,
+            1917
+          ]
+        },
+        "group_top1": {
+          "rate": 0.4693694569699229,
+          "fraction": [
+            6199281167,
+            13207679100
+          ]
+        },
+        "top5": {
+          "count": 1428,
+          "rate": 0.7449139280125195,
+          "fraction": [
+            1428,
+            1917
+          ]
+        },
+        "group_top5": {
+          "rate": 0.7083814470098687,
+          "fraction": [
+            340220903,
+            480279240
+          ]
+        },
+        "recall": {
+          "count": 1583,
+          "rate": 0.8257694314032342,
+          "fraction": [
+            1583,
+            1917
+          ]
+        },
+        "group_recall": {
+          "rate": 0.8010835606991693,
+          "fraction": [
+            5290227301,
+            6603839550
+          ]
+        }
+      },
+      "current_7m": {
+        "n": 1917,
+        "groups": 1386,
+        "top1": {
+          "count": 1270,
+          "rate": 0.6624934793948879,
+          "fraction": [
+            1270,
+            1917
+          ]
+        },
+        "group_top1": {
+          "rate": 0.6365405171374886,
+          "fraction": [
+            1528585979,
+            2401396200
+          ]
+        },
+        "top5": {
+          "count": 1479,
+          "rate": 0.7715179968701096,
+          "fraction": [
+            1479,
+            1917
+          ]
+        },
+        "group_top5": {
+          "rate": 0.7390288732105855,
+          "fraction": [
+            1394408029,
+            1886811300
+          ]
+        },
+        "recall": {
+          "count": 1583,
+          "rate": 0.8257694314032342,
+          "fraction": [
+            1583,
+            1917
+          ]
+        },
+        "group_recall": {
+          "rate": 0.8010835606991693,
+          "fraction": [
+            5290227301,
+            6603839550
+          ]
+        }
+      },
+      "compact": {
+        "n": 1917,
+        "groups": 1386,
+        "top1": {
+          "count": 1279,
+          "rate": 0.667188315075639,
+          "fraction": [
+            1279,
+            1917
+          ]
+        },
+        "group_top1": {
+          "rate": 0.6346557621921629,
+          "fraction": [
+            1397054941,
+            2201279850
+          ]
+        },
+        "top5": {
+          "count": 1478,
+          "rate": 0.7709963484611372,
+          "fraction": [
+            1478,
+            1917
+          ]
+        },
+        "group_top5": {
+          "rate": 0.7381341408802096,
+          "fraction": [
+            1772552521,
+            2401396200
+          ]
+        },
+        "recall": {
+          "count": 1583,
+          "rate": 0.8257694314032342,
+          "fraction": [
+            1583,
+            1917
+          ]
+        },
+        "group_recall": {
+          "rate": 0.8010835606991693,
+          "fraction": [
+            5290227301,
+            6603839550
+          ]
+        }
+      },
+      "large_initial": {
+        "n": 1917,
+        "groups": 1386,
+        "top1": {
+          "count": 1332,
+          "rate": 0.6948356807511737,
+          "fraction": [
+            1332,
+            1917
+          ]
+        },
+        "group_top1": {
+          "rate": 0.6655464951067747,
+          "fraction": [
+            17580649067,
+            26415358200
+          ]
+        },
+        "top5": {
+          "count": 1488,
+          "rate": 0.7762128325508607,
+          "fraction": [
+            1488,
+            1917
+          ]
+        },
+        "group_top5": {
+          "rate": 0.7430185578933395,
+          "fraction": [
+            4906775339,
+            6603839550
+          ]
+        },
+        "recall": {
+          "count": 1583,
+          "rate": 0.8257694314032342,
+          "fraction": [
+            1583,
+            1917
+          ]
+        },
+        "group_recall": {
+          "rate": 0.8010835606991693,
+          "fraction": [
+            5290227301,
+            6603839550
+          ]
+        }
+      },
+      "large": {
+        "n": 1917,
+        "groups": 1386,
+        "top1": {
+          "count": 1344,
+          "rate": 0.701095461658842,
+          "fraction": [
+            1344,
+            1917
+          ]
+        },
+        "group_top1": {
+          "rate": 0.67087038399502,
+          "fraction": [
+            5907093833,
+            8805119400
+          ]
+        },
+        "top5": {
+          "count": 1488,
+          "rate": 0.7762128325508607,
+          "fraction": [
+            1488,
+            1917
+          ]
+        },
+        "group_top5": {
+          "rate": 0.7428983077730894,
+          "fraction": [
+            3270654151,
+            4402559700
+          ]
+        },
+        "recall": {
+          "count": 1583,
+          "rate": 0.8257694314032342,
+          "fraction": [
+            1583,
+            1917
+          ]
+        },
+        "group_recall": {
+          "rate": 0.8010835606991693,
+          "fraction": [
+            5290227301,
+            6603839550
+          ]
+        }
+      },
+      "current_7m_to_large": {
+        "rescues": 89,
+        "breakages": 15
+      },
+      "compact_to_large": {
+        "rescues": 79,
+        "breakages": 14
+      },
+      "initial_to_large": {
+        "rescues": 20,
+        "breakages": 8
+      },
+      "static_to_large": {
+        "rescues": 392,
+        "breakages": 18
+      }
+    },
+    "candidate_checks": {
+      "rows_per_report": {
+        "static": 1917,
+        "current_7m": 1917,
+        "compact": 1917,
+        "large_initial": 1917,
+        "large": 1917
+      },
+      "all_case_ids_and_order_match": true,
+      "identity_multiset_fields": [
+        "text",
+        "consumed",
+        "source",
+        "score_bits"
+      ],
+      "candidate_identity_multiset_and_static_rank_unchanged_all_1917": true,
+      "rank_recomputed_from_actual_full_consumption_noncompletion_candidates": true,
+      "static_rank_matches_static_report_rank": true,
+      "no_recall_rows": 334
+    },
+    "bindings": {
+      "binary": {
+        "path": "results/retrain-20261021/baseline/yanliu",
+        "sha256": "84eb045f1e9b9f71d02ccda94f39070927b0a89546fe6c75a0e68046f0847856",
+        "bytes": 2860184
+      },
+      "current_7m_model": {
+        "path": "results/retrain-20261021/baseline/current-7m.safetensors",
+        "sha256": "280fae2759f588dab6f97e200529ca9975aa06d324b73b1555afb85bd0e7b0f6",
+        "bytes": 7488384
+      },
+      "compact_model": {
+        "path": "results/retrain-20261021/compact-ranking/epoch01-int8.safetensors",
+        "sha256": "625dfc10eeb0fd4a723765589e5ebe1a302f25a61ea923cb4b95265efac70293",
+        "bytes": 4734576
+      },
+      "large_initial_model": {
+        "path": "results/retrain-20261021/large-ranking/epoch00-int8.safetensors",
+        "sha256": "9bd441711088ac160adb5d49523f87e2ea0974b79bcfff8841253c974faafed6",
+        "bytes": 24028120
+      },
+      "large_selected_model": {
+        "path": "results/retrain-20261021/large-ranking/epoch01-int8.safetensors",
+        "sha256": "724d1dad100a98c799d526b0c699d5f3eccf0f995d53bd5634ad98a0cdcdf7b1",
+        "bytes": 24028120
+      },
+      "dev_data": {
+        "path": "data/cache/retrain-20261021/ranking-dev.jsonl",
+        "sha256": "933a31e6a7e19cdbb393b6bca627614c3be14741327f16a1ca7882ef30fc0b04",
+        "bytes": 590952
+      },
+      "reports": {
+        "static": {
+          "path": "results/retrain-20261021/quality-dev/baseline-static.json",
+          "sha256": "22fe87c143cdb12e882520e11412eb70c1af82a32e57dba05267a38c7c2cd51e",
+          "bytes": 12290339
+        },
+        "current_7m": {
+          "path": "results/retrain-20261021/quality-dev/baseline-current-7m.json",
+          "sha256": "e3dc48c58c5d87a13bff93884820fc3c9c826b0d4e58e12475de4cd1dfb0f7dd",
+          "bytes": 12290361
+        },
+        "compact": {
+          "path": "results/retrain-20261021/compact-ranking/dev-epoch01.json",
+          "sha256": "d933f0f26bd13ad2f9cda473f6c57a0f085c6a17861b9ce22c6380fcb9038a00",
+          "bytes": 12290361
+        },
+        "large_initial": {
+          "path": "results/retrain-20261021/large-ranking/dev-initial.json",
+          "sha256": "b86c499ff0c7155c53e6b672426dcd19c2b324114fbbf2a9e92a1317678bbe07",
+          "bytes": 12290361
+        },
+        "large": {
+          "path": "results/retrain-20261021/large-ranking/dev-epoch01.json",
+          "sha256": "8e3732652f25e7ce95e34a58c008638120fd7148d9ee58a142a9c5bb40fde698",
+          "bytes": 12290361
+        }
+      },
+      "dictionaries": {
+        "8105.dict.yaml": {
+          "path": "data/dictionaries/8105.dict.yaml",
+          "sha256": "1f9a42b91dea6982baee2551981780271aeffd78876662b9c9f324e56b37b120",
+          "bytes": 115728
+        },
+        "base.dict.yaml": {
+          "path": "data/dictionaries/base.dict.yaml",
+          "sha256": "0418d5103d8e40c8fff4b686a873ad03e9836cd0419ecae0b7e1e2526312dba0",
+          "bytes": 16602296
+        },
+        "ext.dict.yaml": {
+          "path": "data/dictionaries/ext.dict.yaml",
+          "sha256": "7d2fd8886c099119c651a9306c2f61f07a8967e4f785587b84da45affdd71a54",
+          "bytes": 11924611
+        }
+      }
+    },
+    "limitations": [
+      "Development data selected the checkpoint; this paired dev comparison is not an untouched generalization estimate.",
+      "CPED dev has 440 rows from only 5 independent TV-series groups; rows do not provide 440 independent groups.",
+      "Original corpus spelling and automatic whole-run pypinyin, including polyphonic readings, can be noisy; rates are not natural-user typing accuracy.",
+      "LCCC/wiki/CQIA/TNEWS are regression sources with earlier training exposure possible; NaturalConv/CPED are newly added source groups under recorded corpus exclusions.",
+      "No fresh holdout text, labels or scores and no private learning were read. No thresholds or hyperparameters changed.",
+      "Only this dev candidate quality is measured; observed-regression evaluation, latency, memory, GNOME interaction and key-to-screen delay are outside this report."
+    ],
+    "observed_regression": {
+      "evidence": [
+        {
+          "path": "results/retrain-20261021/regression/compact-summary.json",
+          "sha256": "ffae6252bee970194e82579dc59489b72ac6464be0439c0e6e0e19666c0d5c90",
+          "bytes": 109138
+        },
+        {
+          "path": "results/retrain-20261021/regression/large-summary.json",
+          "sha256": "7dafb78517c14e90f5ac844c76a0304cc7f445108dd6ed23465389da661ef44b",
+          "bytes": 339540
+        }
+      ],
+      "metrics": {
+        "n": 2050,
+        "models": {
+          "baseline": {
+            "top1": 1425,
+            "top5": 1629,
+            "recall": 1698,
+            "group_macro_top1": 0.7236944042044892
+          },
+          "compact": {
+            "top1": 1399,
+            "top5": 1625,
+            "recall": 1698,
+            "group_macro_top1": 0.7047848405297806
+          },
+          "large": {
+            "top1": 1459,
+            "top5": 1637,
+            "recall": 1698,
+            "group_macro_top1": 0.7335642501051909
+          }
+        },
+        "groups": 402,
+        "comparisons": {
+          "large_vs_baseline": {
+            "rescues": 72,
+            "breakages": 38
+          },
+          "large_vs_compact": {
+            "rescues": 87,
+            "breakages": 27
+          }
+        }
+      },
+      "datasets": {
+        "common-words-v1": {
+          "n": 26,
+          "models": {
+            "baseline": {
+              "top1": 23,
+              "top5": 26,
+              "recall": 26,
+              "group_macro_top1": 0.8846153846153846
+            },
+            "compact": {
+              "top1": 23,
+              "top5": 26,
+              "recall": 26,
+              "group_macro_top1": 0.8846153846153846
+            },
+            "large": {
+              "top1": 23,
+              "top5": 26,
+              "recall": 26,
+              "group_macro_top1": 0.8846153846153846
+            }
+          },
+          "groups": 26,
+          "comparisons": {
+            "large_vs_baseline": {
+              "rescues": 1,
+              "breakages": 1
+            },
+            "large_vs_compact": {
+              "rescues": 1,
+              "breakages": 1
+            }
+          }
+        },
+        "context-dev-v2": {
+          "n": 24,
+          "models": {
+            "baseline": {
+              "top1": 22,
+              "top5": 24,
+              "recall": 24,
+              "group_macro_top1": 0.9166666666666666
+            },
+            "compact": {
+              "top1": 19,
+              "top5": 24,
+              "recall": 24,
+              "group_macro_top1": 0.7916666666666666
+            },
+            "large": {
+              "top1": 21,
+              "top5": 24,
+              "recall": 24,
+              "group_macro_top1": 0.875
+            }
+          },
+          "groups": 24,
+          "comparisons": {
+            "large_vs_baseline": {
+              "rescues": 0,
+              "breakages": 1
+            },
+            "large_vs_compact": {
+              "rescues": 2,
+              "breakages": 0
+            }
+          }
+        },
+        "replay-v3-test": {
+          "n": 2000,
+          "models": {
+            "baseline": {
+              "top1": 1380,
+              "top5": 1579,
+              "recall": 1648,
+              "group_macro_top1": 0.6986509957108087
+            },
+            "compact": {
+              "top1": 1357,
+              "top5": 1575,
+              "recall": 1648,
+              "group_macro_top1": 0.6855781417413973
+            },
+            "large": {
+              "top1": 1415,
+              "top5": 1587,
+              "recall": 1648,
+              "group_macro_top1": 0.7127637174496783
+            }
+          },
+          "groups": 352,
+          "comparisons": {
+            "large_vs_baseline": {
+              "rescues": 71,
+              "breakages": 36
+            },
+            "large_vs_compact": {
+              "rescues": 84,
+              "breakages": 26
+            }
+          }
+        }
+      },
+      "candidate_identity_multiset_unchanged": true,
+      "static_rank_unchanged": true,
+      "limitations": [
+        "Observed regression only; handwritten diagnostics and previously observed Tatoeba test are not new independent generalization evidence.",
+        "Tatoeba pinyin is automatic; training overlap cannot be ruled out.",
+        "CPU quality runs overlap XPU training; no timing or memory performance conclusions.",
+        "No fresh holdout or private learning was read; no desktop interaction.",
+        "Tatoeba uses its existing group_id; handwritten datasets use individual diagnostic ids, not independently sampled population groups."
+      ]
+    },
+    "performance": {
+      "evidence": {
+        "path": "results/retrain-20261021/performance/summary.json",
+        "sha256": "14076a7ccf2e24129c57aa07e9b0a5afca3a671936e2f3d731041c414e6115bc",
+        "bytes": 236456
+      },
+      "rounds": 3,
+      "frames_per_run": 354,
+      "scoring_frames_per_run": 218,
+      "known_candidates_per_run": 1935,
+      "cpu_affinity": [
+        2
+      ],
+      "warmup_replays_excluded": 1,
+      "warmup_frames_excluded_per_run": 354,
+      "arms": {
+        "current7m": {
+          "rounds": 3,
+          "frames": 1062,
+          "scoring_frames": 654,
+          "language_candidates": 5805,
+          "scoring_action_plus_promotion_wall_ms": {
+            "p50": 3.54815,
+            "p95": 6.472308,
+            "p99": 9.043695,
+            "n": 654,
+            "max": 19.021945,
+            "total": 2519.195957
+          },
+          "scoring_action_plus_promotion_cpu_ms": {
+            "p50": 3.52614,
+            "p95": 6.455656,
+            "p99": 8.784251,
+            "n": 654,
+            "max": 18.947774,
+            "total": 2500.542558
+          },
+          "same_known_pool_action_plus_promotion_wall_ms": {
+            "p50": 3.54815,
+            "p95": 6.472308,
+            "p99": 9.043695,
+            "n": 654,
+            "max": 19.021945,
+            "total": 2519.195957
+          },
+          "after_replay_RSS_MiB": {
+            "p50": 113.84375,
+            "p95": 113.8671875,
+            "p99": 113.8671875,
+            "n": 3,
+            "max": 113.8671875
+          }
+        },
+        "compact": {
+          "rounds": 3,
+          "frames": 1062,
+          "scoring_frames": 654,
+          "language_candidates": 5805,
+          "scoring_action_plus_promotion_wall_ms": {
+            "p50": 2.279656,
+            "p95": 4.153561,
+            "p99": 5.858726,
+            "n": 654,
+            "max": 12.502776,
+            "total": 1612.476656
+          },
+          "scoring_action_plus_promotion_cpu_ms": {
+            "p50": 2.270554,
+            "p95": 4.139133,
+            "p99": 5.845107,
+            "n": 654,
+            "max": 12.466964,
+            "total": 1607.222127
+          },
+          "same_known_pool_action_plus_promotion_wall_ms": {
+            "p50": 2.279656,
+            "p95": 4.153561,
+            "p99": 5.858726,
+            "n": 654,
+            "max": 12.502776,
+            "total": 1612.476656
+          },
+          "after_replay_RSS_MiB": {
+            "p50": 110.38671875,
+            "p95": 110.49609375,
+            "p99": 110.49609375,
+            "n": 3,
+            "max": 110.49609375
+          }
+        },
+        "large": {
+          "rounds": 3,
+          "frames": 1062,
+          "scoring_frames": 654,
+          "language_candidates": 5805,
+          "scoring_action_plus_promotion_wall_ms": {
+            "p50": 19.861896,
+            "p95": 35.701632,
+            "p99": 40.46629,
+            "n": 654,
+            "max": 69.276672,
+            "total": 13840.568157
+          },
+          "scoring_action_plus_promotion_cpu_ms": {
+            "p50": 19.779735,
+            "p95": 35.507198,
+            "p99": 40.338382,
+            "n": 654,
+            "max": 69.073694,
+            "total": 13782.93792
+          },
+          "same_known_pool_action_plus_promotion_wall_ms": {
+            "p50": 19.861896,
+            "p95": 35.701632,
+            "p99": 40.46629,
+            "n": 654,
+            "max": 69.276672,
+            "total": 13840.568157
+          },
+          "after_replay_RSS_MiB": {
+            "p50": 133.89453125,
+            "p95": 133.91796875,
+            "p99": 133.91796875,
+            "n": 3,
+            "max": 133.91796875
+          }
+        }
+      },
+      "same_trajectories_and_candidate_multisets": true,
+      "same_model_non_timing_behavior_equal_across_rounds": true,
+      "trajectory_sha256": "eacc907f692e8675701525c1c76e2e9abf1dc239456a3d654f5f1b56b30ade65",
+      "quantiles": "Nearest-rank ceil(p*n); all three rounds retained. Empty subsets have n0, null quantiles and zero totals. Timing totals sum the measured action/promotion intervals, excluding warmup/startup.",
+      "counter_scope": "language_groups counts logical language-score calls; language_candidates counts their known candidates, not uncached token forwards. Different models can have different vocabularies, gates, shortlists and work counts. All/scoring frames and matched-scored/same-known-pool subsets are reported separately. Skipped scoring is not faster inference.",
+      "scope": "Public real Session edits and Model::promotion process CPU/wall costs. No personal learning, physical keys, IBus, GNOME drawing or key-to-screen timing. OS file cache is uncontrolled.",
+      "competition": "Run serially after all task-owned training/build/measurement jobs end. The four actual training process/exit records are checked before and after every run; unrelated processes are neither scanned nor stopped.",
+      "limitations": [
+        "Host-specific single-CPU Session replay, not physical-key or key-to-screen timing; OS file cache uncontrolled.",
+        "Three fixed rounds and one fixed candidate pool establish this comparison only, not global optimality."
+      ]
+    },
+    "holdout": {
+      "evidence": {
+        "path": "results/retrain-20261021/final-holdout/summary.json",
+        "sha256": "8380e965b52865f12acf8646c379649786aa220786149d0b241c77565a54caeb",
+        "bytes": 594280
+      },
+      "status": "complete",
+      "n": 1750,
+      "groups": 543,
+      "frozen_decision": {
+        "path": "results/retrain-20261021/decision.json",
+        "sha256": "f982f6c0c43a5b7192df978bae67da0d331fe7cd43c3d3d20646d20268e66994",
+        "bytes": 4800
+      },
+      "default_arm": "compact",
+      "holdout_rule": "All three frozen arms evaluated once, all1750rows included. No choice, threshold, strategy or weight adjustment based on holdout results.",
+      "all_models": {
+        "static": {
+          "n": 1750,
+          "groups": 543,
+          "top1": {
+            "count": 987,
+            "rate": 0.564,
+            "fraction": [
+              987,
+              1750
+            ]
+          },
+          "group_top1": {
+            "rate": 0.5538607694118985,
+            "fraction": [
+              13322311560619303,
+              24053538897086400
+            ]
+          },
+          "top5": {
+            "count": 1409,
+            "rate": 0.8051428571428572,
+            "fraction": [
+              1409,
+              1750
+            ]
+          },
+          "group_top5": {
+            "rate": 0.798259731449033,
+            "fraction": [
+              57602914501161173,
+              72160616691259200
+            ]
+          },
+          "recall": {
+            "count": 1533,
+            "rate": 0.876,
+            "fraction": [
+              1533,
+              1750
+            ]
+          },
+          "group_recall": {
+            "rate": 0.8659202421221863,
+            "fraction": [
+              15621334669245361,
+              18040154172814800
+            ]
+          }
+        },
+        "current7m": {
+          "n": 1750,
+          "groups": 543,
+          "top1": {
+            "count": 1252,
+            "rate": 0.7154285714285714,
+            "fraction": [
+              1252,
+              1750
+            ]
+          },
+          "group_top1": {
+            "rate": 0.711416519169956,
+            "fraction": [
+              102672509495306083,
+              144321233382518400
+            ]
+          },
+          "top5": {
+            "count": 1455,
+            "rate": 0.8314285714285714,
+            "fraction": [
+              1455,
+              1750
+            ]
+          },
+          "group_top5": {
+            "rate": 0.8224991231817891,
+            "fraction": [
+              9131083685664287,
+              11101633337116800
+            ]
+          },
+          "recall": {
+            "count": 1533,
+            "rate": 0.876,
+            "fraction": [
+              1533,
+              1750
+            ]
+          },
+          "group_recall": {
+            "rate": 0.8659202421221863,
+            "fraction": [
+              15621334669245361,
+              18040154172814800
+            ]
+          }
+        },
+        "compact": {
+          "n": 1750,
+          "groups": 543,
+          "top1": {
+            "count": 1286,
+            "rate": 0.7348571428571429,
+            "fraction": [
+              1286,
+              1750
+            ]
+          },
+          "group_top1": {
+            "rate": 0.7481917778121007,
+            "fraction": [
+              8306150783115503,
+              11101633337116800
+            ]
+          },
+          "top5": {
+            "count": 1462,
+            "rate": 0.8354285714285714,
+            "fraction": [
+              1462,
+              1750
+            ]
+          },
+          "group_top5": {
+            "rate": 0.8315631095669612,
+            "fraction": [
+              9231708739085087,
+              11101633337116800
+            ]
+          },
+          "recall": {
+            "count": 1533,
+            "rate": 0.876,
+            "fraction": [
+              1533,
+              1750
+            ]
+          },
+          "group_recall": {
+            "rate": 0.8659202421221863,
+            "fraction": [
+              15621334669245361,
+              18040154172814800
+            ]
+          }
+        },
+        "large": {
+          "n": 1750,
+          "groups": 543,
+          "top1": {
+            "count": 1326,
+            "rate": 0.7577142857142857,
+            "fraction": [
+              1326,
+              1750
+            ]
+          },
+          "group_top1": {
+            "rate": 0.7704438989803207,
+            "fraction": [
+              6177300764048683,
+              8017846299028800
+            ]
+          },
+          "top5": {
+            "count": 1462,
+            "rate": 0.8354285714285714,
+            "fraction": [
+              1462,
+              1750
+            ]
+          },
+          "group_top5": {
+            "rate": 0.8311205379313648,
+            "fraction": [
+              59974170561898363,
+              72160616691259200
+            ]
+          },
+          "recall": {
+            "count": 1533,
+            "rate": 0.876,
+            "fraction": [
+              1533,
+              1750
+            ]
+          },
+          "group_recall": {
+            "rate": 0.8659202421221863,
+            "fraction": [
+              15621334669245361,
+              18040154172814800
+            ]
+          }
+        }
+      },
+      "sources": {
+        "naturalconv": {
+          "static": {
+            "n": 1000,
+            "groups": 534,
+            "top1": {
+              "count": 573,
+              "rate": 0.573,
+              "fraction": [
+                573,
+                1000
+              ]
+            },
+            "group_top1": {
+              "rate": 0.5539950062421972,
+              "fraction": [
+                1775,
+                3204
+              ]
+            },
+            "top5": {
+              "count": 807,
+              "rate": 0.807,
+              "fraction": [
+                807,
+                1000
+              ]
+            },
+            "group_top5": {
+              "rate": 0.7982209737827716,
+              "fraction": [
+                1705,
+                2136
+              ]
+            },
+            "recall": {
+              "count": 869,
+              "rate": 0.869,
+              "fraction": [
+                869,
+                1000
+              ]
+            },
+            "group_recall": {
+              "rate": 0.8656367041198502,
+              "fraction": [
+                1849,
+                2136
+              ]
+            }
+          },
+          "current7m": {
+            "n": 1000,
+            "groups": 534,
+            "top1": {
+              "count": 727,
+              "rate": 0.727,
+              "fraction": [
+                727,
+                1000
+              ]
+            },
+            "group_top1": {
+              "rate": 0.7117665418227216,
+              "fraction": [
+                4561,
+                6408
+              ]
+            },
+            "top5": {
+              "count": 832,
+              "rate": 0.832,
+              "fraction": [
+                832,
+                1000
+              ]
+            },
+            "group_top5": {
+              "rate": 0.8224094881398252,
+              "fraction": [
+                2635,
+                3204
+              ]
+            },
+            "recall": {
+              "count": 869,
+              "rate": 0.869,
+              "fraction": [
+                869,
+                1000
+              ]
+            },
+            "group_recall": {
+              "rate": 0.8656367041198502,
+              "fraction": [
+                1849,
+                2136
+              ]
+            }
+          },
+          "compact": {
+            "n": 1000,
+            "groups": 534,
+            "top1": {
+              "count": 758,
+              "rate": 0.758,
+              "fraction": [
+                758,
+                1000
+              ]
+            },
+            "group_top1": {
+              "rate": 0.7490636704119851,
+              "fraction": [
+                200,
+                267
+              ]
+            },
+            "top5": {
+              "count": 839,
+              "rate": 0.839,
+              "fraction": [
+                839,
+                1000
+              ]
+            },
+            "group_top5": {
+              "rate": 0.8316167290886392,
+              "fraction": [
+                5329,
+                6408
+              ]
+            },
+            "recall": {
+              "count": 869,
+              "rate": 0.869,
+              "fraction": [
+                869,
+                1000
+              ]
+            },
+            "group_recall": {
+              "rate": 0.8656367041198502,
+              "fraction": [
+                1849,
+                2136
+              ]
+            }
+          },
+          "large": {
+            "n": 1000,
+            "groups": 534,
+            "top1": {
+              "count": 778,
+              "rate": 0.778,
+              "fraction": [
+                778,
+                1000
+              ]
+            },
+            "group_top1": {
+              "rate": 0.771223470661673,
+              "fraction": [
+                2471,
+                3204
+              ]
+            },
+            "top5": {
+              "count": 838,
+              "rate": 0.838,
+              "fraction": [
+                838,
+                1000
+              ]
+            },
+            "group_top5": {
+              "rate": 0.8311485642946317,
+              "fraction": [
+                2663,
+                3204
+              ]
+            },
+            "recall": {
+              "count": 869,
+              "rate": 0.869,
+              "fraction": [
+                869,
+                1000
+              ]
+            },
+            "group_recall": {
+              "rate": 0.8656367041198502,
+              "fraction": [
+                1849,
+                2136
+              ]
+            }
+          }
+        },
+        "cped": {
+          "static": {
+            "n": 750,
+            "groups": 9,
+            "top1": {
+              "count": 414,
+              "rate": 0.552,
+              "fraction": [
+                414,
+                750
+              ]
+            },
+            "group_top1": {
+              "rate": 0.5458960508141751,
+              "fraction": [
+                217636440199303,
+                398677440283200
+              ]
+            },
+            "top5": {
+              "count": 602,
+              "rate": 0.8026666666666666,
+              "fraction": [
+                602,
+                750
+              ]
+            },
+            "group_top5": {
+              "rate": 0.800559352980543,
+              "fraction": [
+                957494860923173,
+                1196032320849600
+              ]
+            },
+            "recall": {
+              "count": 664,
+              "rate": 0.8853333333333333,
+              "fraction": [
+                664,
+                750
+              ]
+            },
+            "group_recall": {
+              "rate": 0.8827434969274619,
+              "fraction": [
+                263947438336261,
+                299008080212400
+              ]
+            }
+          },
+          "current7m": {
+            "n": 750,
+            "groups": 9,
+            "top1": {
+              "count": 525,
+              "rate": 0.7,
+              "fraction": [
+                525,
+                750
+              ]
+            },
+            "group_top1": {
+              "rate": 0.6906485084391921,
+              "fraction": [
+                1652075876879683,
+                2392064641699200
+              ]
+            },
+            "top5": {
+              "count": 623,
+              "rate": 0.8306666666666667,
+              "fraction": [
+                623,
+                750
+              ]
+            },
+            "group_top5": {
+              "rate": 0.8278174690049779,
+              "fraction": [
+                152322530568287,
+                184004972438400
+              ]
+            },
+            "recall": {
+              "count": 664,
+              "rate": 0.8853333333333333,
+              "fraction": [
+                664,
+                750
+              ]
+            },
+            "group_recall": {
+              "rate": 0.8827434969274619,
+              "fraction": [
+                263947438336261,
+                299008080212400
+              ]
+            }
+          },
+          "compact": {
+            "n": 750,
+            "groups": 9,
+            "top1": {
+              "count": 528,
+              "rate": 0.704,
+              "fraction": [
+                528,
+                750
+              ]
+            },
+            "group_top1": {
+              "rate": 0.6964594835522986,
+              "fraction": [
+                128152008075503,
+                184004972438400
+              ]
+            },
+            "top5": {
+              "count": 623,
+              "rate": 0.8306666666666667,
+              "fraction": [
+                623,
+                750
+              ]
+            },
+            "group_top5": {
+              "rate": 0.8283816846140684,
+              "fraction": [
+                152426349045887,
+                184004972438400
+              ]
+            },
+            "recall": {
+              "count": 664,
+              "rate": 0.8853333333333333,
+              "fraction": [
+                664,
+                750
+              ]
+            },
+            "group_recall": {
+              "rate": 0.8827434969274619,
+              "fraction": [
+                263947438336261,
+                299008080212400
+              ]
+            }
+          },
+          "large": {
+            "n": 750,
+            "groups": 9,
+            "top1": {
+              "count": 548,
+              "rate": 0.7306666666666667,
+              "fraction": [
+                548,
+                750
+              ]
+            },
+            "group_top1": {
+              "rate": 0.7241893125534231,
+              "fraction": [
+                96239313803083,
+                132892480094400
+              ]
+            },
+            "top5": {
+              "count": 624,
+              "rate": 0.832,
+              "fraction": [
+                624,
+                750
+              ]
+            },
+            "group_top5": {
+              "rate": 0.8294576403775241,
+              "fraction": [
+                992058146667163,
+                1196032320849600
+              ]
+            },
+            "recall": {
+              "count": 664,
+              "rate": 0.8853333333333333,
+              "fraction": [
+                664,
+                750
+              ]
+            },
+            "group_recall": {
+              "rate": 0.8827434969274619,
+              "fraction": [
+                263947438336261,
+                299008080212400
+              ]
+            }
+          }
+        }
+      },
+      "definitions": {
+        "denominator": "All 1750 rows, including no recall; no result-dependent exclusions.",
+        "group": "Explicit group_id/source_group: 534 NaturalConv news groups and 9 CPED TV groups; group and within-group row weights are equal.",
+        "static": "Derived from the identical static_rank fields in the three raw CLI reports; no fourth CLI invocation.",
+        "paired": "Top1/top5/recall rescue and breakage IDs/ranks are relative to each named before/after report; raw CLI metrics remain static-relative."
+      },
+      "checks": {
+        "candidate_identity_multiset_fields": [
+          "text",
+          "consumed",
+          "source",
+          "score_bits"
+        ],
+        "candidate_identity_multiset_and_static_rank_unchanged": true,
+        "full_consumption_noncompletion_ranks_recomputed": true,
+        "all_bucket_denominators_preserved": true,
+        "decision_and_assets_unchanged": true
+      },
+      "limitations": [
+        "Single frozen holdout pass; results do not change the frozen selection, thresholds or weights.",
+        "CPED has only 9 independent TV groups; row count is not independent-group count.",
+        "Original text and automatic pinyin can be noisy; these rates are not natural-user typing accuracy.",
+        "No system learning, tuning, training, performance measurement or real desktop interaction is part of this run."
+      ],
+      "assets": {
+        "binary": {
+          "path": "results/retrain-20261021/baseline/yanliu",
+          "sha256": "84eb045f1e9b9f71d02ccda94f39070927b0a89546fe6c75a0e68046f0847856",
+          "bytes": 2860184
+        },
+        "holdout": {
+          "path": "data/cache/retrain-20261021/ranking-holdout.jsonl",
+          "sha256": "61724a965822faa8da3f9c1dbdbce100c605186e479ec0d9637f363759588ad8",
+          "bytes": 543557
+        },
+        "model/current7m": {
+          "path": "results/retrain-20261021/baseline/current-7m.safetensors",
+          "sha256": "280fae2759f588dab6f97e200529ca9975aa06d324b73b1555afb85bd0e7b0f6",
+          "bytes": 7488384
+        },
+        "model/compact": {
+          "path": "results/retrain-20261021/compact-ranking/epoch01-int8.safetensors",
+          "sha256": "625dfc10eeb0fd4a723765589e5ebe1a302f25a61ea923cb4b95265efac70293",
+          "bytes": 4734576
+        },
+        "model/large": {
+          "path": "results/retrain-20261021/large-ranking/epoch01-int8.safetensors",
+          "sha256": "724d1dad100a98c799d526b0c699d5f3eccf0f995d53bd5634ad98a0cdcdf7b1",
+          "bytes": 24028120
+        },
+        "dictionary/8105.dict.yaml": {
+          "path": "data/dictionaries/8105.dict.yaml",
+          "sha256": "1f9a42b91dea6982baee2551981780271aeffd78876662b9c9f324e56b37b120",
+          "bytes": 115728
+        },
+        "dictionary/base.dict.yaml": {
+          "path": "data/dictionaries/base.dict.yaml",
+          "sha256": "0418d5103d8e40c8fff4b686a873ad03e9836cd0419ecae0b7e1e2526312dba0",
+          "bytes": 16602296
+        },
+        "dictionary/ext.dict.yaml": {
+          "path": "data/dictionaries/ext.dict.yaml",
+          "sha256": "7d2fd8886c099119c651a9306c2f61f07a8967e4f785587b84da45affdd71a54",
+          "bytes": 11924611
+        },
+        "source/src/model.rs": {
+          "path": "src/model.rs",
+          "sha256": "bf7d17bb0c7a4545894c0a975f70f046dc718dfc612c6d5128122569c938feb4",
+          "bytes": 17816
+        },
+        "source/src/lib.rs": {
+          "path": "src/lib.rs",
+          "sha256": "983946c058ff8186a3b98effe6ee617a15de63020d79c904df55fdd9926b10ab",
+          "bytes": 23381
+        },
+        "source/src/learning.rs": {
+          "path": "src/learning.rs",
+          "sha256": "51475c4abb55123fac876176ab1cf65417999e01d37b723b48e885a931f39393",
+          "bytes": 35960
+        },
+        "source/src/decoder.rs": {
+          "path": "src/decoder.rs",
+          "sha256": "c951d07793e094bc412e3627b66f5d309279fecab0b643cb0ac9b24b4cd9f4b6",
+          "bytes": 53036
+        },
+        "source/src/dictionary.rs": {
+          "path": "src/dictionary.rs",
+          "sha256": "8b2e2835951c5951c708c4c7fc10fa4be9773a7ca986ae93bbf73b2e6ce2733e",
+          "bytes": 28587
+        },
+        "source/src/ibus.rs": {
+          "path": "src/ibus.rs",
+          "sha256": "ea4accb12a23d29205bd4d300be03335db196e925a731203fc2c12d89f9c37b8",
+          "bytes": 68565
+        },
+        "source/src/session.rs": {
+          "path": "src/session.rs",
+          "sha256": "45a911d9ff6a2d8f83b8837b7574a1dfa5d73716de04821e2b3f91b62c5a3752",
+          "bytes": 32467
+        },
+        "source/src/bin/yanliu-ibus.rs": {
+          "path": "src/bin/yanliu-ibus.rs",
+          "sha256": "e992916b72528f46d3eb21be84bf105133c5b402ffa749f90ccaf8857cbf9b0a",
+          "bytes": 2699
+        },
+        "source/src/bin/yanliu.rs": {
+          "path": "src/bin/yanliu.rs",
+          "sha256": "8ac5abc3203b2f95a4777c83ecef2ab6a323232c79b84a7060bb44ce7f6bba12",
+          "bytes": 3875
+        },
+        "source/src/model/openvino.rs": {
+          "path": "src/model/openvino.rs",
+          "sha256": "b77c4239198ec1755c53b368b31406bd8193d49df141501db96c07494f8d32a8",
+          "bytes": 11352
+        },
+        "source/src/bin/yanliu-ibus/config.rs": {
+          "path": "src/bin/yanliu-ibus/config.rs",
+          "sha256": "8ef5523167ee58ef65db6a653040e870e983082e59b733786168edcad23652da",
+          "bytes": 11547
+        },
+        "source/src/bin/yanliu/evaluate.rs": {
+          "path": "src/bin/yanliu/evaluate.rs",
+          "sha256": "22064f25fa79c8120a56ae7f890f02bc48e86b60f36771d85d239971593a6f80",
+          "bytes": 5434
+        },
+        "source/Cargo.toml": {
+          "path": "Cargo.toml",
+          "sha256": "942ccbef87b870f5d33504d1bbcf461216cc928c7fd08afdc9fa662d69868f4d",
+          "bytes": 1102
+        },
+        "source/Cargo.lock": {
+          "path": "Cargo.lock",
+          "sha256": "4c73f490cbe0ef49dc4788bf4fae45b7422fd2c5f2cf5ea417d19e3f588126fd",
+          "bytes": 30175
+        },
+        "source/vendor/chinese-ime-lm/src/lib.rs": {
+          "path": "vendor/chinese-ime-lm/src/lib.rs",
+          "sha256": "f77b9d6d8b38969cef0d50a5d26afdb64efe418aef69d1e177373492ba25f4db",
+          "bytes": 47852
+        },
+        "source/vendor/chinese-ime-lm/src/weights.rs": {
+          "path": "vendor/chinese-ime-lm/src/weights.rs",
+          "sha256": "caf8b5e3ee988bbec2478e034243608719cc29fcbe398499d00d454943f40109",
+          "bytes": 9133
+        },
+        "source/scripts/train_ranker.py": {
+          "path": "scripts/train_ranker.py",
+          "sha256": "67b83f7fdebcc790dc7d0e1c8a40c76eeb10e0e038bff8165eddc67fc31a2d30",
+          "bytes": 26156
+        }
+      }
+    }
+  },
+  "release_role": "optional",
+  "decision": {
+    "evidence": {
+      "path": "results/retrain-20261021/decision.json",
+      "sha256": "f982f6c0c43a5b7192df978bae67da0d331fe7cd43c3d3d20646d20268e66994",
+      "bytes": 4800
+    },
+    "frozen_at": "2026-10-21T18:26:11.019737+00:00",
+    "default_arm": "compact",
+    "arms": {
+      "current7m": {
+        "path": "results/retrain-20261021/baseline/current-7m.safetensors",
+        "sha256": "280fae2759f588dab6f97e200529ca9975aa06d324b73b1555afb85bd0e7b0f6"
+      },
+      "compact": {
+        "path": "results/retrain-20261021/compact-ranking/epoch01-int8.safetensors",
+        "sha256": "625dfc10eeb0fd4a723765589e5ebe1a302f25a61ea923cb4b95265efac70293"
+      },
+      "large": {
+        "path": "results/retrain-20261021/large-ranking/epoch01-int8.safetensors",
+        "sha256": "724d1dad100a98c799d526b0c699d5f3eccf0f995d53bd5634ad98a0cdcdf7b1"
+      }
+    },
+    "rationale": "Choose the retrained compact model for offline low-latency CPU use. Its dev top1 is close to installed7M, scoring p95 falls6.47ms to4.15ms. Observed replay top1 falls1380 to1357/2000, so this is an explicit speed/quality tradeoff, not blanket improvement. Large is optional for higher dev/replay top1 at35.70ms p95 and higher RSS; its four-choice contextual fixture fails but a separate eight-choice scenario learns/persists correctly. No product thresholds or weights are altered to fit checks.",
+    "holdout_rule": "All three frozen arms evaluated once, all1750rows included. No choice, threshold, strategy or weight adjustment based on holdout results."
+  },
+  "integration_checks": {
+    "evidence": {
+      "path": "results/retrain-20261021/large-ibus/report.json",
+      "sha256": "366bb220a83f0c2b0b90b4e5ddbff2f074827ca9fd2133164204d55caa508c2b",
+      "bytes": 1934
+    },
+    "original_suite_exit_code": 1,
+    "coverage": "Private IBus protocol and contextual-learning groups use selected large model; other three groups keep existing default fixtures. No desktop source changes, personal state or key-to-screen measurement.",
+    "original_five_group_check": {
+      "passed": 4,
+      "failed": "contextual first-choice assertion after four explicit choices per context",
+      "choice_counts_and_adapter_updates_persisted": true,
+      "persisted_choice_count_per_context": 4,
+      "persisted_adapter_updates": 4
+    },
+    "additional_isolated_eight_choice_scenario": {
+      "exit_code": 0,
+      "eight_choices_per_context": true,
+      "both_expected_first_choices": true,
+      "persisted_after_restart": true,
+      "sensitive_input_did_not_learn": true,
+      "updates": 6,
+      "stdout_sha256": "ee0e19ba306403ae9f26fcc05789cd85a68e4293e361ebacd0e2e935e127c65d",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "scope": "Separate diagnostic with eight explicit choices per context; original four-choice failure is retained, no product or test assertion changes. Minimum required corrections was not measured."
+    },
+    "limitations": [
+      "Original four-choice first-choice assertion failed; the separate eight-choice scenario does not establish the minimum required correction count.",
+      "Private protocol integration only; no real desktop interaction or latency conclusion."
+    ]
+  }
+}
