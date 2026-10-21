@@ -8,7 +8,14 @@
       "revision": "da1fbe602e38f26db846fa10120ee64c2b0324c0",
       "license": "GPL-3.0",
       "sha256": "1f9a42b91dea6982baee2551981780271aeffd78876662b9c9f324e56b37b120",
-      "size": 115728
+      "size": 115728,
+      "effective_sha256": "398eb4c826cb3cfa4a2fc7d8d07bd3f2a76d2d07133c4a96ee79b90d22355916",
+      "effective_size": 115729,
+      "local_patch": {
+        "path": "data/8105.dict.local.patch",
+        "sha256": "cf08d5d8f4222a771c97d32c35ee680d8fe5e09c200c56da9379cffcb077ac80"
+      },
+      "note": "Local single-character prior correction: 了/le uses 34812434, the cited BLCU character-frequency table row 3 (sheet1 C4); upstream weight 3481243 is about ten times lower. Other readings and all other upstream weights are unchanged. Source: https://faculty.blcu.edu.cn/xinghb/zh_CN/article/167473/content/1437.htm ; downloaded XLSX SHA-256 61f818732473e1d9e555383e7679c13f2e9c760d2752d50574f5a2e393bac6db. This is a character-frequency prior for the common reading, not a per-reading frequency estimate."
     },
     {
       "path": "data/dictionaries/base.dict.yaml",

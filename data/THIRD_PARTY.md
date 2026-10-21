@@ -11,10 +11,19 @@ is applied.
 
 Source: https://github.com/iDvel/rime-ice/tree/da1fbe602e38f26db846fa10120ee64c2b0324c0/cn_dicts
 
-`8105.dict.yaml`, `base.dict.yaml` and the upstream rows of `ext.dict.yaml` keep
-their weights and headers. The headers carry further attribution and provenance,
-including THUOCL and Tencent word vectors; these notices must travel with the
-files. The upstream GPL-3.0 license is kept as `dictionaries/LICENSE`.
+`base.dict.yaml` and the upstream rows of `ext.dict.yaml` keep their weights and
+headers. `8105.dict.yaml` keeps its headers and readings, with one local weight
+correction in `8105.dict.local.patch`: `了/le` uses 34,812,434 instead of
+3,481,243 so a bare `l` does not rank “来” ahead of “了”. The value is the total
+character count in row 3 (sheet1 cell C4) of the dictionary's cited
+[BLCU 2.5-billion-character frequency table](https://faculty.blcu.edu.cn/xinghb/zh_CN/article/167473/content/1437.htm),
+downloaded XLSX SHA-256
+`61f818732473e1d9e555383e7679c13f2e9c760d2752d50574f5a2e393bac6db`.
+It supplies a prior for the common reading, not a per-reading frequency estimate;
+the `liao` reading and all other weights are unchanged. The headers carry further
+attribution and provenance, including THUOCL and Tencent word vectors; these
+notices must travel with the files. The upstream GPL-3.0 license is kept as
+`dictionaries/LICENSE`.
 
 `ext.dict.local.patch` appends computer, Linux and science headwords that the
 decoder did not return for their full pinyin, each with weight 100 and a reading

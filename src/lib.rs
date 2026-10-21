@@ -386,6 +386,18 @@ mod tests {
         assert!(!d.decode("xi'an").iter().any(|c| c.text == "现"));
         assert!(d.decode("n").iter().any(|c| c.text == "你"));
         assert!(d.decode("n").iter().any(|c| c.text == "年"));
+        for input in ["l", "L"] {
+            let candidates = d.decode(input);
+            assert_eq!(candidates[0].text, "了", "{input}");
+            assert_eq!(candidates[0].consumed, 1);
+            assert_eq!(candidates[0].source, CandidateSource::Completion);
+            assert!(candidates.iter().any(|c| c.text == "来"));
+        }
+        for (input, expected) in [("le", "了"), ("lai", "来")] {
+            let candidates = d.decode(input);
+            assert_eq!(candidates[0].text, expected, "{input}");
+            assert_eq!(candidates[0].source, CandidateSource::ExactDictionary);
+        }
         let nh = d.decode("nh");
         let hello = nh
             .iter()
