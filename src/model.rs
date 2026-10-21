@@ -360,18 +360,29 @@ mod tests {
     #[test]
     fn unknown_characters_have_no_language_advantage_over_the_leader() {
         let mut model = model();
+        let sentence_model = match &model.backend {
+            Backend::Cpu(reranker) => reranker.model(),
+            #[cfg(feature = "accelerator")]
+            Backend::Accelerator(_) => unreachable!("the test fixture loads the CPU model"),
+        };
+        for character in ['如', '入', '对'] {
+            assert!(sentence_model.contains_character(character));
+        }
+        for character in ['㨎', '𠮷'] {
+            assert!(!sentence_model.contains_character(character));
+        }
         let known = model.language_scores("出", &["如", "入"]).unwrap();
-        let mixed = model.language_scores("出", &["如", "乳", "入"]).unwrap();
+        let mixed = model.language_scores("出", &["如", "㨎", "入"]).unwrap();
         assert_eq!(mixed, vec![known[0], known[0], known[1]]);
         assert!(
             known[1] > known[0],
             "known homophones must still use context"
         );
         assert_eq!(
-            model.language_scores("出", &["乳", "如", "入"]).unwrap(),
+            model.language_scores("出", &["㨎", "如", "入"]).unwrap(),
             vec![0.0; 3]
         );
-        let scores = model.language_scores("好", &["对", "㨃", "𬭚"]).unwrap();
+        let scores = model.language_scores("好", &["对", "㨎", "𠮷"]).unwrap();
         assert_eq!(scores, vec![0.0; 3]);
     }
 
@@ -379,25 +390,31 @@ mod tests {
     fn an_explicit_unknown_character_choice_still_learns() {
         let decoder = Arc::new(Decoder::new(
             Dictionary::from_rime_reader(Cursor::new(
-                "...\n如\tru\t4308194\n乳\tru\t68901\n入\tru\t1000000\n",
+                "...\n如\tru\t4308194\n㨎\tru\t68901\n入\tru\t1000000\n",
             ))
             .unwrap(),
         ));
         let learning = Arc::new(Learning::new(true));
         let mut model = model();
+        let sentence_model = match &model.backend {
+            Backend::Cpu(reranker) => reranker.model(),
+            #[cfg(feature = "accelerator")]
+            Backend::Accelerator(_) => unreachable!("the test fixture loads the CPU model"),
+        };
+        assert!(!sentence_model.contains_character('㨎'));
         let mut session = Session::new(decoder, Some(learning));
         session.set_context("牛");
         session.insert("ru").unwrap();
         let chosen = session
             .candidates()
             .iter()
-            .position(|candidate| candidate.text == "乳")
+            .position(|candidate| candidate.text == "㨎")
             .unwrap();
         session.select(chosen).unwrap();
         session.reset();
         session.set_context("牛");
         session.insert("ru").unwrap();
-        assert_eq!(session.candidates()[0].text, "乳");
+        assert_eq!(session.candidates()[0].text, "㨎");
         assert_eq!(session.candidates()[0].source, CandidateSource::User);
         assert_eq!(model.promotion(&session.snapshot()).unwrap(), None);
     }
