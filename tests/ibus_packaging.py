@@ -40,8 +40,8 @@ with tempfile.TemporaryDirectory(prefix='yanliu-packaging-') as temp:
     env = dict(os.environ, YANLIU_PREFIX=str(prefix), XDG_CONFIG_HOME=str(config),
                PATH=f'{temp}/stub-bin:{os.environ["PATH"]}', IBUS_COMPONENT_PATH='/existing/ibus/component')
 
-    def install(**changes):
-        return subprocess.run([fixture / 'packaging/install-local.sh'], env=dict(env, **changes), capture_output=True, text=True)
+    def install(*args, **changes):
+        return subprocess.run([fixture / 'packaging/install-local.sh', *args], env=dict(env, **changes), capture_output=True, text=True)
 
     def uninstall():
         subprocess.run([fixture / 'packaging/uninstall-local.sh'], env=env, check=True, capture_output=True)
@@ -76,7 +76,200 @@ with tempfile.TemporaryDirectory(prefix='yanliu-packaging-') as temp:
     assert shlex.split(component.get_exec()) == [str(prefix / 'bin/yanliu-ibus'), '--ibus', '--config', str(config_file)]
     assert json.loads(config_file.read_text()) == {'data_dir': str(share)}
     assert installed[3].read_text() == f'IBUS_COMPONENT_PATH={prefix}/share/ibus/component:/existing/ibus/component\n'
-    assert 'uninstall first' in install().stderr
+    assert 'use --upgrade' in install().stderr
+    result = install('--rollback')
+    assert result.returncode != 0 and 'no previous installation' in result.stderr
+
+    # Upgrades replace only verified assets; custom files and private state stay current.
+    previous = prefix / 'share/.yanliu-previous'
+    custom = share / 'custom/words.dict.yaml'
+    custom.parent.mkdir()
+    custom.write_text('user-maintained dictionary\n')
+    nested_custom = share / 'models/user-notes.txt'
+    nested_custom.write_text('notes in a managed directory\n')
+    state = temp / 'private-state/learning.json'
+    state.parent.mkdir()
+    state.write_text('fixture private learning\n')
+    (share / 'custom-link').symlink_to(state)
+    unchanged = {path: path.read_bytes() for path in (config_file, installed[2], installed[3], state)}
+    first_manifest = (share / 'installation.json').read_bytes()
+    (fixture / 'target/release/yanliu-ibus').write_text('updated fixture binary\n')
+    result = install('--upgrade')
+    assert result.returncode == 0, result.stderr
+    assert 'Reload the Yanliu IBus service' in result.stdout
+    assert (share / 'bin/yanliu-ibus').read_text() == 'updated fixture binary\n'
+    assert (previous / 'installation.json').read_bytes() == first_manifest
+    second_manifest = (share / 'installation.json').read_bytes()
+
+    def assert_preserved():
+        assert custom.read_text() == 'user-maintained dictionary\n'
+        assert nested_custom.read_text() == 'notes in a managed directory\n'
+        assert (share / 'custom-link').readlink() == state
+        assert not (previous / 'custom').exists() and not (previous / 'custom-link').is_symlink()
+        assert all(path.read_bytes() == text for path, text in unchanged.items())
+
+    assert_preserved()
+    result = install('--rollback')
+    assert result.returncode == 0, result.stderr
+    assert (share / 'installation.json').read_bytes() == first_manifest
+    assert (previous / 'installation.json').read_bytes() == second_manifest
+    assert_preserved()
+    assert install('--upgrade').returncode == 0
+    assert (share / 'installation.json').read_bytes() == second_manifest
+    assert_preserved()
+
+    # A failure after activation restores both versions and already-moved custom files.
+    failure = '''import runpy, sys
+from pathlib import Path
+original = Path.rename
+failed = False
+def rename(path, target):
+    global failed
+    if path.name == 'custom-link' and not failed:
+        failed = True
+        raise OSError('fixture late activation failure')
+    return original(path, target)
+Path.rename = rename
+sys.argv = [sys.argv[1], sys.argv[2]]
+runpy.run_path(sys.argv[0], run_name='__main__')
+'''
+    for action in ('--upgrade', '--rollback'):
+        result = subprocess.run(['/usr/bin/python3', '-c', failure, str(fixture / 'packaging/install_assets.py'), action],
+                                env=env, capture_output=True, text=True)
+        assert result.returncode != 0 and 'fixture late activation failure' in result.stderr, result.stderr
+        assert (share / 'installation.json').read_bytes() == second_manifest
+        assert (previous / 'installation.json').read_bytes() == first_manifest
+        assert_preserved()
+        assert not list((prefix / 'share').glob('.yanliu-install-*')), 'complete recovery should clean staging'
+
+    # Failed recovery must leave every version and custom item available for manual repair.
+    recovery_failure = '''import runpy, sys
+from pathlib import Path
+original = Path.rename
+failed = False
+point = sys.argv[3]
+def rename(path, target):
+    global failed
+    target = Path(target)
+    if path.name == 'custom-link' and not failed:
+        failed = True
+        raise OSError('fixture initial activation failure')
+    if failed and (
+        (point == 'rollback-stage' and path.name == 'yanliu' and path.parent.name.startswith('.yanliu-install-')
+         and target.name == '.yanliu-previous')
+        or (point == 'upgrade-older' and path.name == 'older')
+        or (point == 'unknown-reverse' and path.name == 'custom' and path.parent.name == 'yanliu')
+        or (point == 'current-directory' and path.name == '.yanliu-previous' and target.name == 'yanliu')
+    ):
+        raise OSError('fixture recovery rename failure')
+    return original(path, target)
+Path.rename = rename
+sys.argv = [sys.argv[1], sys.argv[2]]
+runpy.run_path(sys.argv[0], run_name='__main__')
+'''
+    built = fixture / 'target/release/yanliu-ibus'
+    original_binary = built.read_bytes()
+    for point in ('rollback-stage', 'upgrade-older', 'unknown-reverse', 'current-directory'):
+        scenario = temp / f'recovery-{point}'
+        scenario_prefix, scenario_config = scenario / 'local', scenario / 'config'
+        changes = dict(YANLIU_PREFIX=str(scenario_prefix), XDG_CONFIG_HOME=str(scenario_config))
+        built.write_text('fixture recovery old version\n')
+        result = install(**changes)
+        assert result.returncode == 0, result.stderr
+        scenario_share = scenario_prefix / 'share/yanliu'
+        scenario_previous = scenario_prefix / 'share/.yanliu-previous'
+        old_version = (scenario_share / 'installation.json').read_bytes()
+        built.write_text('fixture recovery current version\n')
+        result = install('--upgrade', **changes)
+        assert result.returncode == 0, result.stderr
+        current_version = (scenario_share / 'installation.json').read_bytes()
+        (scenario_share / 'custom').mkdir()
+        (scenario_share / 'custom/words.dict.yaml').write_text('recovery user dictionary\n')
+        (scenario_share / 'custom-link').symlink_to(state)
+        scenario_config_file = scenario_config / 'yanliu/config.json'
+        config_before = scenario_config_file.read_bytes()
+        built.write_text('fixture recovery proposed version\n')
+        action = '--rollback' if point == 'rollback-stage' else '--upgrade'
+        result = subprocess.run(['/usr/bin/python3', '-c', recovery_failure,
+                                 str(fixture / 'packaging/install_assets.py'), action, point],
+                                env=dict(env, **changes), capture_output=True, text=True)
+        assert result.returncode != 0 and 'fixture initial activation failure' in result.stderr, result.stderr
+        assert 'fixture recovery rename failure' in result.stderr, result.stderr
+        marker = 'recovery assets preserved in '
+        assert marker in result.stderr, result.stderr
+        retained = Path(result.stderr.split(marker, 1)[1].splitlines()[0])
+        assert retained.parent == scenario_share.parent and retained.is_dir(), 'recovery staging must survive process exit'
+        versions = [scenario_share, scenario_previous, retained / 'yanliu', retained / 'older']
+        manifests = [(path / 'installation.json').read_bytes() for path in versions
+                     if (path / 'installation.json').is_file()]
+        assert old_version in manifests and current_version in manifests, 'existing assets must remain recoverable'
+        for version in versions:
+            if (version / 'installation.json').is_file():
+                files = json.loads((version / 'installation.json').read_text())['files']
+                assert all(hashlib.sha256((version / name).read_bytes()).hexdigest() == expected
+                           for name, expected in files.items()), 'retained versions need their actual managed assets'
+        custom_files = [path / 'custom/words.dict.yaml' for path in versions
+                        if (path / 'custom/words.dict.yaml').is_file()]
+        assert len(custom_files) == 1 and custom_files[0].read_text() == 'recovery user dictionary\n'
+        links = [path / 'custom-link' for path in versions if (path / 'custom-link').is_symlink()]
+        assert len(links) == 1 and links[0].readlink() == state
+        assert scenario_config_file.read_bytes() == config_before
+        assert state.read_bytes() == unchanged[state]
+    built.write_bytes(original_binary)
+
+    result = install('--upgrade', YANLIU_MODEL_DIR=str(temp / 'missing-model'))
+    assert result.returncode != 0 and 'missing-model' in result.stderr
+    assert (share / 'installation.json').read_bytes() == second_manifest
+    assert (previous / 'installation.json').read_bytes() == first_manifest
+    assert_preserved()
+    (share / 'models/NOTICE').write_text('user model notes\n')
+    (fixture / 'data/models/NOTICE').write_text('new upstream attribution\n')
+    result = install('--upgrade')
+    assert result.returncode != 0 and 'conflict with an unmanaged file' in result.stderr
+    assert (share / 'models/NOTICE').read_text() == 'user model notes\n'
+    (share / 'models/NOTICE').unlink()
+    (fixture / 'data/models/NOTICE').unlink()
+    (previous / 'keep-custom.txt').write_text('must not delete\n')
+    for action in ('--upgrade', '--rollback'):
+        result = install(action)
+        assert result.returncode != 0 and 'unmanaged files' in result.stderr
+        assert (previous / 'keep-custom.txt').read_text() == 'must not delete\n'
+    (previous / 'keep-custom.txt').unlink()
+
+    # The one historical, actually installed manifest shape remains verifiable.
+    record = json.loads(second_manifest)
+    provenance = share / 'models/provenance.json'
+    provenance.write_text('{"fixture":"historical"}\n')
+    record['files']['models/provenance.json'] = hashlib.sha256(provenance.read_bytes()).hexdigest()
+    record['selected_model'] = record.pop('model')['source_path']
+    record['model_provenance'] = 'models/provenance.json'
+    (share / 'installation.json').write_text(json.dumps(record))
+    result = install('--upgrade')
+    assert result.returncode == 0, result.stderr
+    assert json.loads((previous / 'installation.json').read_text()) == record
+    assert_preserved()
+    damaged = share / 'bin/yanliu-ibus'
+    damaged.write_text('locally modified managed binary\n')
+    result = install('--upgrade')
+    assert result.returncode != 0 and 'installed SHA-256' in result.stderr
+    assert damaged.read_text() == 'locally modified managed binary\n'
+    damaged.write_bytes((fixture / 'target/release/yanliu-ibus').read_bytes())
+    current_manifest = (share / 'installation.json').read_bytes()
+    unsupported = json.loads(current_manifest)
+    unsupported['obsolete_manifest_field'] = True
+    (share / 'installation.json').write_text(json.dumps(unsupported))
+    result = install('--upgrade')
+    assert result.returncode != 0 and 'unsupported installation manifest fields' in result.stderr
+    (share / 'installation.json').write_bytes(current_manifest)
+    config_file.write_text(json.dumps({'data_dir': str(share), 'obsolete_option': True}))
+    result = install('--upgrade')
+    assert result.returncode != 0 and 'unknown config fields' in result.stderr
+    config_file.write_bytes(unchanged[config_file])
+    assert_preserved()
+    # Uninstall's historical contract removes the installed asset tree; move test custom files out first.
+    custom.parent.rename(temp / 'saved-custom')
+    nested_custom.rename(temp / 'saved-model-notes.txt')
+    (share / 'custom-link').unlink()
 
     (prefix / 'bin/other-input-method').write_text('preserve\n')
     preserved = json.dumps({'data_dir': str(share), 'learning_enabled': False, 'user_dictionary': 'words.dict.yaml',
@@ -180,8 +373,23 @@ with tempfile.TemporaryDirectory(prefix='yanliu-packaging-') as temp:
             if not path.is_dir()} == {*installed_runtime['files'], 'runtime-source.json'}
     assert os.readlink(share / 'runtime/libopenvino.so') == 'libopenvino.so.2600'
     assert json.loads(config_file.read_text()) == {'data_dir': str(share), 'device': 'npu', 'runtime_dir': str(share / 'runtime')}
+    npu_config = config_file.read_bytes()
+    npu_manifest = (share / 'installation.json').read_bytes()
+    result = install('--rollback')
+    assert result.returncode != 0 and 'previous assets do not support configured device npu' in result.stderr
+    assert (share / 'installation.json').read_bytes() == npu_manifest
+    result = install('--upgrade', **npu)
+    assert result.returncode == 0, result.stderr
+    assert (previous / 'installation.json').read_bytes() == npu_manifest
+    (fixture / 'cargo-call').unlink()
+    result = install('--rollback')
+    assert result.returncode == 0, result.stderr
+    assert not (fixture / 'cargo-call').exists(), 'rollback must not compile'
+    assert (share / 'installation.json').read_bytes() == npu_manifest
+    assert config_file.read_bytes() == npu_config
     uninstall()
     assert_refused(install(), "selects device 'npu'")
     print('PASS: CPU default/selected model and NPU installation layout, component XML, config preservation and device agreement, '
           'selected model and IR hashes, complete licenses and attribution hashes, runtime provenance, '
-          'rollback, overwrite refusal and reversible uninstall')
+          'verified upgrade/rollback, custom-file and private-state preservation, late-failure recovery, '
+          'overwrite refusal and reversible uninstall')

@@ -183,9 +183,16 @@ impl Session {
     }
     fn refresh(&mut self) {
         self.revision += 1;
-        let candidates = self
+        let Some(mut candidates) = self
             .decoder
-            .decode_cached(&self.input, &mut self.decode_cache);
+            .decode_cached(&self.input, &mut self.decode_cache)
+        else {
+            self.candidates.clear();
+            return;
+        };
+        if let Some(learning) = &self.learning {
+            candidates.extend(learning.recall(&self.input, &candidates));
+        }
         let counts = match &self.learning {
             Some(learning) => learning.counts(&self.input, &candidates),
             None => vec![0; candidates.len()],

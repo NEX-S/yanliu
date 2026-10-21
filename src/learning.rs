@@ -14,6 +14,7 @@ use std::{
 
 const VERSION: u32 = 1;
 const MAX_ROWS: usize = 4096;
+const RECALL_LIMIT: usize = 8;
 const FEATURES: usize = 4096;
 const WEIGHT_LIMIT: f32 = 8.0;
 const SAVE_DELAY: Duration = Duration::from_millis(250);
@@ -76,6 +77,62 @@ impl Learning {
 
     pub(crate) fn contextual(&self) -> bool {
         self.contextual
+    }
+
+    /// Recall previously confirmed raw prefixes without changing dictionary candidate identities.
+    pub(crate) fn recall(&self, input: &str, candidates: &[Candidate]) -> Vec<Candidate> {
+        let state = self.lock();
+        if state.counts.is_empty() {
+            return Vec::new();
+        }
+        let mut rows = Vec::new();
+        for consumed in 1..=input.len() {
+            let prefix = &input[..consumed];
+            if consumed == 1
+                && input.len() != 1
+                && b"bpmfdtnlgkhjqxrzcsyw".contains(&input.as_bytes()[0].to_ascii_lowercase())
+            {
+                continue;
+            }
+            for ((raw, text), &count) in state.counts.range((prefix.to_owned(), String::new())..) {
+                if raw != prefix {
+                    break;
+                }
+                // In particular, a matching Completion must keep its untyped-text semantics.
+                if !candidates
+                    .iter()
+                    .any(|candidate| candidate.consumed == consumed && candidate.text == *text)
+                {
+                    rows.push((raw, text, count));
+                }
+            }
+        }
+        let class = |raw: &str| {
+            if raw.len() == input.len() {
+                2
+            } else if raw.ends_with('\'') {
+                1
+            } else {
+                0
+            }
+        };
+        rows.sort_by(|(a, at, ac), (b, bt, bc)| {
+            class(b)
+                .cmp(&class(a))
+                .then(b.len().cmp(&a.len()))
+                .then(bc.cmp(ac))
+                .then(at.cmp(bt))
+        });
+        rows.into_iter()
+            .take(RECALL_LIMIT)
+            .map(|(raw, text, count)| Candidate {
+                text: text.clone(),
+                consumed: raw.len(),
+                source: CandidateSource::User,
+                // Use the decoder's lexical-frequency scale with explicit choices as frequency.
+                score: (count as f32).ln_1p() / 14.0 - 2.0,
+            })
+            .collect()
     }
 
     /// Explicit-choice counts for the raw input each candidate consumes. A Completion contains
@@ -987,5 +1044,66 @@ mod tests {
             .unwrap() = u32::MAX;
         choose("新");
         assert_eq!(count(&learning, "ni", "新"), Some(u32::MAX));
+    }
+
+    #[test]
+    fn personal_recall_has_a_fixed_budget_and_prefers_full_then_closed_prefixes() {
+        let learning = Learning::new(false);
+        for index in 0..16 {
+            let text = format!("词{index:02}");
+            for _ in 0..index + 1 {
+                assert!(learning.record_choice("ni", "", &[candidate(&text, 2)], 0));
+            }
+        }
+        assert!(learning.record_choice("ni'", "", &[candidate("边界", 3)], 0));
+        assert!(learning.record_choice("ni'hao", "", &[candidate("完整", 6)], 0));
+        let recalled = learning.recall("ni'hao", &[]);
+        assert_eq!(recalled.len(), RECALL_LIMIT);
+        assert_eq!(recalled[0].text, "完整");
+        assert_eq!(recalled[0].consumed, 6);
+        assert_eq!(recalled[1].text, "边界");
+        assert_eq!(recalled[1].consumed, 3);
+        assert_eq!(
+            recalled[2..]
+                .iter()
+                .map(|c| c.text.as_str())
+                .collect::<Vec<_>>(),
+            ["词15", "词14", "词13", "词12", "词11", "词10"]
+        );
+        assert!(
+            recalled
+                .iter()
+                .all(|candidate| candidate.source == CandidateSource::User)
+        );
+        assert!(learning.recall("", &[]).is_empty());
+        let baseline = vec![candidate("完整", 6), candidate("边界", 3)];
+        let recalled = learning.recall("ni'hao", &baseline);
+        assert_eq!(recalled.len(), RECALL_LIMIT);
+        assert!(
+            recalled
+                .iter()
+                .all(|candidate| !baseline.iter().any(|existing| {
+                    candidate.text == existing.text && candidate.consumed == existing.consumed
+                }))
+        );
+
+        let decoder = decoder("你\tni\t100\n好\thao\t100\n");
+        let public = decoder.decode("ni'hao");
+        let mut session = Session::new(decoder, Some(Arc::new(learning)));
+        session.insert("ni'hao").unwrap();
+        assert_eq!(session.candidates().len(), public.len() + RECALL_LIMIT);
+        assert_eq!(
+            session
+                .candidates()
+                .iter()
+                .filter(|c| c.source == CandidateSource::User)
+                .count(),
+            RECALL_LIMIT
+        );
+        assert!(
+            public
+                .iter()
+                .all(|candidate| session.candidates().contains(candidate))
+        );
     }
 }

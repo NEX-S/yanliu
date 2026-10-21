@@ -149,7 +149,7 @@ mod tests {
         for input in [
             "n", "nh", "nhx", "nhao", "n'h", "zg", "zhg", "nihao", "nih", "sh", "shh",
         ] {
-            let cached = d.decode_cached(input, &mut cache);
+            let cached = d.decode_cached(input, &mut cache).unwrap();
             let fresh = d.decode(input);
             assert_eq!(cached.len(), fresh.len(), "{input}");
             for (cached, fresh) in cached.iter().zip(&fresh) {
@@ -390,10 +390,10 @@ mod tests {
             let candidates = d.decode(input);
             assert_eq!(candidates[0].text, "了", "{input}");
             assert_eq!(candidates[0].consumed, 1);
-            assert_eq!(candidates[0].source, CandidateSource::Completion);
+            assert_eq!(candidates[0].source, CandidateSource::ExactDictionary);
             assert!(candidates.iter().any(|c| c.text == "来"));
         }
-        for (input, expected) in [("le", "了"), ("lai", "来")] {
+        for (input, expected) in [("le", "了"), ("lai", "来"), ("dui", "对"), ("ru", "如")] {
             let candidates = d.decode(input);
             assert_eq!(candidates[0].text, expected, "{input}");
             assert_eq!(candidates[0].source, CandidateSource::ExactDictionary);

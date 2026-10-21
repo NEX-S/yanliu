@@ -54,7 +54,7 @@ python3 scripts/fetch_assets.py
 
 完成后**注销并重新登录**，在 **GNOME 设置 → 键盘 → 输入源**中添加“砚流”。安装脚本不会切换当前输入源。
 
-升级或重装前先运行 `./packaging/uninstall-local.sh`，配置和选词记录会保留。自定义安装位置、GPU / NPU 配置见[安装说明](packaging/README.md)。
+已有安装可运行 `./packaging/install-local.sh --upgrade`，保留上一版资产；需要回退时运行 `./packaging/install-local.sh --rollback`。操作前正常退出砚流服务，完成后重新加载，配置和选词记录保留。自定义安装位置和详细步骤见[安装说明](packaging/README.md)。
 
 ## 使用
 
@@ -65,8 +65,9 @@ python3 scripts/fetch_assets.py
 - 左右方向键编辑拼音，`Home` / `End` 跳到首尾。
 - `Enter` 提交拼音原文，`Esc` 取消，`Ctrl+Space` 切换中英文模式。
 - 单引号分隔音节。输入 `ji'cheng` 时，可以先选“吉”，再接着输入 `cheng`。
+- 单字母可快捷选单字，例如输入 `l` 选择“来”；明确选择后会记住偏好。继续输入到 `lai` 时仍按正常拼音转换。
 
-明确选过的词会记在本机。学习记录可以查看、清除或关闭；密码等敏感字段直接透传，不参与学习。完整按键和配置见[使用手册](docs/USER-GUIDE.md)。
+明确选过的词会记在本机；即使后来未出现在词库候选中，也可从个人记录中召回。学习记录可以查看、清除或关闭；密码等敏感字段直接透传，不参与学习。完整按键和配置见[使用手册](docs/USER-GUIDE.md)。
 
 <details>
 <summary>在终端查看候选</summary>

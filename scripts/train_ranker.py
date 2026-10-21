@@ -96,7 +96,8 @@ def shortlist(case, candidates):
     if not candidates or not answers(candidates[0]):
         return []
     leader = candidates[0]["source"]
-    if leader == "User" or (not case["context"] and leader == "ExactDictionary"):
+    if ((len(case["input"]) == 1 and case["input"].lower() in "bpmfdtnlgkhjqxrzcsyw")
+            or leader == "User" or (not case["context"] and leader == "ExactDictionary")):
         return []
     eligible = [i for i, candidate in enumerate(candidates) if answers(candidate)]
     selected = eligible[:7]

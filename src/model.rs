@@ -90,12 +90,14 @@ impl Model {
         }
         let considered_candidates = || considered.iter().map(|&i| &candidates[i]);
         let texts: Vec<&str> = considered_candidates().map(|c| c.text.as_str()).collect();
-        // Enabling personal learning alone must not remove the no-context leader protection.
-        let language = if context.is_empty()
-            && matches!(
-                candidates[0].source,
-                CandidateSource::ExactDictionary | CandidateSource::User
-            ) {
+        // A bare initial has no syllable evidence for a public language-model prior.
+        // Personal learning also keeps the existing no-context leader protection.
+        let language = if single_initial(input)
+            || (context.is_empty()
+                && matches!(
+                    candidates[0].source,
+                    CandidateSource::ExactDictionary | CandidateSource::User
+                )) {
             vec![0.0; texts.len()]
         } else {
             self.language_scores(context, &texts)?
@@ -235,6 +237,10 @@ fn answers_input(input: &str, candidate: &Candidate) -> bool {
     candidate.consumed == input.len() && candidate.source != CandidateSource::Completion
 }
 
+fn single_initial(input: &str) -> bool {
+    input.len() == 1 && b"bpmfdtnlgkhjqxrzcsyw".contains(&input.as_bytes()[0].to_ascii_lowercase())
+}
+
 fn shortlist(
     input: &str,
     context: &str,
@@ -247,7 +253,8 @@ fn shortlist(
     };
     if !answers_input(input, leader)
         || (!personal
-            && (leader.source == CandidateSource::User
+            && (single_initial(input)
+                || leader.source == CandidateSource::User
                 || (context.is_empty() && leader.source == CandidateSource::ExactDictionary)))
     {
         return Vec::new();
@@ -418,6 +425,63 @@ mod tests {
         candidates[0].source = CandidateSource::Composed;
         candidates[0].consumed = 2;
         assert!(shortlist("xian", "我去", &candidates, true).is_empty());
+    }
+
+    #[test]
+    fn single_initials_use_only_personal_scores_even_with_context_and_learned_user_source() {
+        let decoder = Arc::new(Decoder::new(
+            Dictionary::from_rime_reader(Cursor::new("...\n了\tle\t1000\n来\tlai\t100\n")).unwrap(),
+        ));
+        let mut model = model();
+        assert!(
+            model
+                .language_scores("我马上", &["了", "来"])
+                .unwrap()
+                .iter()
+                .all(|s| *s < 0.0)
+        );
+        for contextual in [false, true] {
+            let learning = Arc::new(Learning::new(contextual));
+            let mut session = Session::new(decoder.clone(), Some(learning));
+            session.set_context("我马上");
+            session.insert("l").unwrap();
+            for learned in [false, true] {
+                if learned {
+                    let index = session
+                        .candidates()
+                        .iter()
+                        .position(|c| c.text == "来")
+                        .unwrap();
+                    assert_eq!(session.select(index).as_deref(), Some("来"));
+                    session.reset();
+                    session.set_context("我马上");
+                    session.insert("l").unwrap();
+                    assert_eq!(session.candidates()[0].source, CandidateSource::User);
+                }
+                let result = model.explain_promotion(&session.snapshot()).unwrap();
+                if contextual {
+                    assert_eq!(result.scores.len(), 2);
+                    assert!(result.scores.iter().all(|score| score.language == 0.0));
+                    if learned {
+                        assert!(result.scores.iter().any(|score| score.personal != 0.0));
+                    }
+                } else {
+                    assert!(result.scores.is_empty());
+                }
+            }
+        }
+        let candidates = [
+            candidate("了", 1, CandidateSource::ExactDictionary),
+            candidate("来", 1, CandidateSource::ExactDictionary),
+        ];
+        for initial in b"bpmfdtnlgkhjqxrzcsywBPMFDTNLGKHJQXRZCSYW" {
+            let input = char::from(*initial).to_string();
+            assert!(shortlist(&input, "前文", &candidates, false).is_empty());
+            assert_eq!(shortlist(&input, "前文", &candidates, true), [0, 1]);
+        }
+        for vowel in ["a", "e", "o"] {
+            assert_eq!(shortlist(vowel, "前文", &candidates, false), [0, 1]);
+        }
     }
 
     #[test]

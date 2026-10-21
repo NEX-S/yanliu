@@ -11,7 +11,11 @@ use yanliu::{
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
 fn main() -> Result<()> {
-    tokio::runtime::Runtime::new()?.block_on(service())
+    tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(1)
+        .enable_all()
+        .build()?
+        .block_on(service())
 }
 
 async fn service() -> Result<()> {

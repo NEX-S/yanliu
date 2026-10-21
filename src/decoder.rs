@@ -86,14 +86,19 @@ impl Decoder {
     }
     pub fn decode(&self, input: &str) -> Vec<Candidate> {
         self.decode_cached(input, &mut DecodeCache::default())
+            .unwrap_or_default()
     }
-    pub(crate) fn decode_cached(&self, input: &str, cache: &mut DecodeCache) -> Vec<Candidate> {
+    pub(crate) fn decode_cached(
+        &self,
+        input: &str,
+        cache: &mut DecodeCache,
+    ) -> Option<Vec<Candidate>> {
         let Some(input) = scan_input(input) else {
             *cache = DecodeCache::default();
-            return Vec::new();
+            return None;
         };
         let mut candidates = self.decode_ordinary_cached(&input, cache);
-        // A bare initial is still being typed; keep its ordinary completions.
+        // Corrections start after the first letter and exclude initial digraphs.
         if input.raw.len() <= MAX_CORRECTION_BYTES
             && input.key.len() > 1
             && !matches!(input.key.as_str(), "zh" | "ch" | "sh")
@@ -103,7 +108,7 @@ impl Decoder {
             self.append_missing_letters(&input, &mut candidates, limit);
         }
         self.append_syllable_characters(&input, &mut candidates);
-        candidates
+        Some(candidates)
     }
 
     fn decode_ordinary_cached(
@@ -121,7 +126,42 @@ impl Decoder {
         }
         let first_end = cache.beams.len();
         cache.beams.resize_with(input.key.len() + 1, Vec::new);
-        let mixed = self.fill_beams(&input.key, &input.boundaries, first_end, &mut cache.beams);
+        let mut mixed = self.fill_beams(&input.key, &input.boundaries, first_end, &mut cache.beams);
+        if input.raw.len() == 1 && b"bpmfdtnlgkhjqxrzcsyw".contains(&input.key.as_bytes()[0]) {
+            let root = State::default();
+            // A bare initial confirms one character, but never becomes a parent of longer input.
+            for entry in self
+                .dictionary
+                .by_initials(input.key.as_bytes())
+                .filter(|entry| {
+                    let mut chars = entry.text.chars();
+                    // Unicode 17 CJK unified/compatibility ideographs and ideographic zero.
+                    entry.ends.len() == 1
+                        && matches!(
+                            chars.next(),
+                            Some(
+                                '〇'
+                                | '\u{3400}'..='\u{4dbf}'
+                                | '\u{4e00}'..='\u{9fff}'
+                                | '\u{f900}'..='\u{fa6d}'
+                                | '\u{fa70}'..='\u{fad9}'
+                                | '\u{20000}'..='\u{2a6df}'
+                                | '\u{2a700}'..='\u{2b81d}'
+                                | '\u{2b820}'..='\u{2cead}'
+                                | '\u{2ceb0}'..='\u{2ebe0}'
+                                | '\u{2ebf0}'..='\u{2ee5d}'
+                                | '\u{2f800}'..='\u{2fa1d}'
+                                | '\u{30000}'..='\u{3134a}'
+                                | '\u{31350}'..='\u{33479}',
+                            )
+                        )
+                        && chars.next().is_none()
+                })
+                .take(SPAN_ENTRIES)
+            {
+                offer(&mut mixed, &root, &entry, false);
+            }
+        }
         cache.input.clear();
         cache.input.push_str(input.raw);
         let reserved = reserve_readings(self.dictionary.exact(&input.key), input);
@@ -693,22 +733,22 @@ mod tests {
         let rows: String = (0..BEAM + 1)
             .map(|i| {
                 let text = char::from_u32(0x4e00 + i as u32).unwrap();
-                format!("{text}\tde\t{}\n", 100 - i)
+                format!("{text}\tdei\t{}\n", 100 - i)
             })
             .collect();
         let d = decoder(&rows);
-        let mut candidates = ordinary(&d, "d");
+        let mut candidates = ordinary(&d, "de");
         assert_eq!(candidates.len(), BEAM);
         let limit = candidates.len() + CORRECTION_LIMIT;
-        d.append_missing_letters(&scan_input("d").unwrap(), &mut candidates, limit);
+        d.append_missing_letters(&scan_input("de").unwrap(), &mut candidates, limit);
         assert_eq!(candidates.len(), BEAM + 1);
         for candidate in &candidates {
             let entry = d
                 .dictionary
-                .exact("de")
+                .exact("dei")
                 .find(|entry| entry.text == candidate.text)
                 .unwrap();
-            assert_eq!(candidate.consumed, 1);
+            assert_eq!(candidate.consumed, 2);
             assert_eq!(candidate.source, CandidateSource::Completion);
             assert_eq!(
                 candidate.score.to_bits(),
@@ -718,7 +758,7 @@ mod tests {
     }
 
     #[test]
-    fn single_initials_keep_ordinary_completions_without_learning() {
+    fn single_initial_characters_are_confirmable_but_digraph_completions_are_not_learned() {
         let d = Arc::new(decoder(
             "的\tde\t100\n第\tdi\t10\n你\tni\t100\n片\tpian\t100\n人\tren\t100\n我\two\t100\n是\tshi\t100\n中\tzhong\t100\n吃\tchi\t100\n啊\ta\t1e30\n饿\te\t1e30\n哦\to\t1e30\n嗯\ten\t1e30\n",
         ));
@@ -742,12 +782,20 @@ mod tests {
                 "{raw}"
             );
             assert_eq!(session.candidates()[0].text, expected, "{raw}");
+            let single = raw.len() == 1;
             assert!(session.candidates().iter().all(|candidate| {
-                candidate.consumed == raw.len() && candidate.source == CandidateSource::Completion
+                candidate.consumed == raw.len()
+                    && candidate.source
+                        == if single {
+                            CandidateSource::ExactDictionary
+                        } else {
+                            CandidateSource::Completion
+                        }
             }));
+            let before = learning.revision();
             assert_eq!(session.select(0).as_deref(), Some(expected));
             assert_eq!(session.input(), "");
-            assert_eq!(learning.revision(), 0, "{raw}");
+            assert_eq!(learning.revision(), before + u64::from(single), "{raw}");
         }
         for (raw, expected) in [("a", "啊"), ("e", "饿"), ("o", "哦"), ("de", "的")] {
             session.insert(raw).unwrap();
@@ -759,6 +807,53 @@ mod tests {
             );
             session.reset();
         }
+    }
+
+    #[test]
+    fn single_initial_shortcuts_are_single_han_and_never_cached_as_longer_parents() {
+        let d = decoder(
+            "了\tle\t1000\n来\tlai\t100\n拉\tla\t80\n里\tli\t60\n梁\tliang\t50\n来了\tlai\t40\nΩ\tla\t30\n。\tla\t20\n🙂\tla\t10\n𬭚\tlu\t9\n〇\tling\t8\n啊\ta\t1000\n",
+        );
+        let mut cache = DecodeCache::default();
+        for input in [
+            "l", "la", "lai", "l", "li", "lia", "liang", "L", "La", "Lai",
+        ] {
+            let cached = d.decode_cached(input, &mut cache).unwrap();
+            assert_eq!(bits(&cached), bits(&d.decode(input)), "{input}");
+            if input.len() == 1 {
+                assert!(
+                    cache.beams[1].is_empty(),
+                    "shortcut leaked into prefix beam"
+                );
+                for text in ["了", "来", "𬭚", "〇"] {
+                    assert!(cached.iter().any(|c| c.text == text
+                        && c.consumed == 1
+                        && c.source == CandidateSource::ExactDictionary));
+                }
+                for text in ["来了", "Ω", "。", "🙂"] {
+                    assert!(cached.iter().any(|c| c.text == text
+                        && c.consumed == 1
+                        && c.source == CandidateSource::Completion));
+                }
+            } else {
+                assert!(
+                    cached
+                        .iter()
+                        .all(|c| c.consumed != 1 || c.source != CandidateSource::ExactDictionary),
+                    "{input}"
+                );
+            }
+        }
+        assert!(
+            d.decode("l'").is_empty(),
+            "apostrophe is not a bare initial shortcut"
+        );
+        assert_eq!(d.decode("a")[0].source, CandidateSource::ExactDictionary);
+        assert!(
+            d.decode("li")
+                .iter()
+                .any(|c| c.text == "梁" && c.source == CandidateSource::Completion)
+        );
     }
 
     #[test]
@@ -807,7 +902,7 @@ mod tests {
             "a", "aa", "aab", "aabaa", "aabaab", "a'ab", "a'aba", "a'", "a", "", "A", "''",
         ] {
             assert_eq!(
-                bits(&d.decode_cached(input, &mut cache)),
+                bits(&d.decode_cached(input, &mut cache).unwrap_or_default()),
                 bits(&d.decode(input)),
                 "{input}"
             );
@@ -830,9 +925,9 @@ mod tests {
             "ab''".to_owned(),
             "a".repeat(MAX_INPUT_BYTES + 1),
         ] {
-            d.decode_cached("aab", &mut cache);
+            d.decode_cached("aab", &mut cache).unwrap();
             assert!(!cache.beams.is_empty());
-            assert!(d.decode_cached(&input, &mut cache).is_empty(), "{input}");
+            assert!(d.decode_cached(&input, &mut cache).is_none(), "{input}");
             assert_eq!(cache.input.capacity(), 0);
             assert_eq!(cache.beams.capacity(), 0);
         }
@@ -938,7 +1033,11 @@ mod tests {
         assert_eq!(swaps(d.decode(&format!("na{}", "q".repeat(23)))), 0);
         let mut cache = DecodeCache::default();
         for raw in ["n", "na", "naq", "na'", "na", "", "na"] {
-            assert_eq!(d.decode_cached(raw, &mut cache), d.decode(raw), "{raw}");
+            assert_eq!(
+                d.decode_cached(raw, &mut cache).unwrap_or_default(),
+                d.decode(raw),
+                "{raw}"
+            );
         }
     }
 
@@ -974,7 +1073,11 @@ mod tests {
         for raw in [
             "n", "no", "noh", "nohao", "no'haoq", "noha", "nihao", "", "nohao",
         ] {
-            assert_eq!(d.decode_cached(raw, &mut cache), d.decode(raw), "{raw}");
+            assert_eq!(
+                d.decode_cached(raw, &mut cache).unwrap_or_default(),
+                d.decode(raw),
+                "{raw}"
+            );
         }
     }
     #[test]
@@ -1145,7 +1248,11 @@ mod tests {
         for raw in [
             "i", "ih", "ihao", "iha", "niho", "nihoq", "ni'ho", "niha'", "", "ihao",
         ] {
-            assert_eq!(d.decode_cached(raw, &mut cache), d.decode(raw), "{raw}");
+            assert_eq!(
+                d.decode_cached(raw, &mut cache).unwrap_or_default(),
+                d.decode(raw),
+                "{raw}"
+            );
         }
     }
     #[test]
@@ -1291,7 +1398,7 @@ mod tests {
             "",
         ] {
             assert_eq!(
-                bits(&d.decode_cached(raw, &mut cache)),
+                bits(&d.decode_cached(raw, &mut cache).unwrap_or_default()),
                 bits(&d.decode(raw)),
                 "{raw}"
             );
@@ -1355,7 +1462,7 @@ mod tests {
             "j", "ji", "ji'", "ji'cheng", "j'i", "jia", "v", "xi'an", "ji", "", "ji'",
         ] {
             assert_eq!(
-                bits(&d.decode_cached(raw, &mut cache)),
+                bits(&d.decode_cached(raw, &mut cache).unwrap_or_default()),
                 bits(&d.decode(raw)),
                 "{raw}"
             );

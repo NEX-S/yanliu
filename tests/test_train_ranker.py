@@ -83,6 +83,20 @@ class TrainingDataTests(unittest.TestCase):
         candidates[10]["text"] = "两个"
         self.assertEqual(TRAIN.shortlist(case, candidates), [0, 1, 2, 3, 4, 5, 6, 10, 7])
 
+    def test_single_initial_shortcuts_never_train_a_public_language_prior(self):
+        candidates = [candidate("了", source="ExactDictionary", consumed=1),
+                      candidate("来", source="ExactDictionary", consumed=1)]
+        for initial in "bpmfdtnlgkhjqxrzcsywBPMFDTNLGKHJQXRZCSYW":
+            with self.subTest(initial=initial):
+                case = {"input": initial, "context": "我马上", "golds": ["来"], "id": initial}
+                self.assertEqual(TRAIN.shortlist(case, candidates), [])
+                groups, statuses = TRAIN.training_groups([case], {"rows": [{"id": initial,
+                    "candidates": candidates}]}, 64, VOCAB + ["了", "来"])
+                self.assertEqual(groups, [])
+                self.assertEqual(statuses, {"protected_or_no_competition": 1})
+        for vowel in "aeo":
+            self.assertEqual(TRAIN.shortlist({"input": vowel, "context": "前文"}, candidates), [0, 1])
+
     def test_training_uses_bits_prior_and_excludes_neutral_or_missing_targets(self):
         cases = [{"id": str(i), "input": "xian", "context": "前文", "golds": ["西安"]}
                  for i in range(4)]

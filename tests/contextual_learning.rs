@@ -289,3 +289,222 @@ fn contextual_habits_can_reverse_and_relearn_without_replacing_saved_parameters(
     writer.finish().unwrap();
     assert_eq!(directory.snapshot(), snapshot);
 }
+
+#[test]
+fn confirmed_words_are_recalled_when_public_candidates_change_and_survive_restart() {
+    let directory = StateDirectory::new();
+    let original = Arc::new(Decoder::new(
+        Dictionary::from_rime_reader(Cursor::new("...\n你\tni\t100\n泥\tni\t1\n")).unwrap(),
+    ));
+    let changed = Arc::new(Decoder::new(
+        Dictionary::from_rime_reader(Cursor::new("...\n你\tni\t100\n好\thao\t100\n")).unwrap(),
+    ));
+    assert!(
+        changed
+            .decode("ni")
+            .iter()
+            .all(|candidate| candidate.text != "泥")
+    );
+    let mut writer = directory.writer(false);
+    let mut session = Session::new(original, Some(writer.learning.clone()));
+    let mut other_engine = Session::new(changed.clone(), Some(writer.learning.clone()));
+    session.insert("ni").unwrap();
+    choose(&mut session, "泥", 2);
+
+    let public = changed.decode("ni");
+    other_engine.insert("ni").unwrap();
+    assert_eq!(other_engine.candidates()[0].text, "泥");
+    assert_eq!(other_engine.candidates()[0].source, CandidateSource::User);
+    assert_eq!(other_engine.candidates()[0].consumed, 2);
+    for candidate in &public {
+        assert!(other_engine.candidates().contains(candidate));
+    }
+    assert_eq!(other_engine.candidates().len(), public.len() + 1);
+    let before = menu(&other_engine);
+    writer.finish().unwrap();
+    assert_eq!(
+        directory.snapshot()["rows"],
+        serde_json::json!([{"input": "ni", "text": "泥", "count": 1}])
+    );
+
+    let mut writer = directory.writer(false);
+    let mut session = Session::new(changed.clone(), Some(writer.learning.clone()));
+    session.insert("ni").unwrap();
+    assert_eq!(menu(&session), before);
+    session.reset();
+    session.insert("nihao").unwrap();
+    choose(&mut session, "泥", 2);
+    assert_eq!(session.input(), "hao");
+    assert_eq!(session.context(), "泥");
+    writer.finish().unwrap();
+    assert_eq!(directory.snapshot()["rows"][0]["count"], 2);
+
+    let mut isolated = Session::new(changed, None);
+    isolated.insert("ni").unwrap();
+    assert!(
+        isolated
+            .candidates()
+            .iter()
+            .all(|candidate| candidate.text != "泥")
+    );
+}
+
+#[test]
+fn personal_prefix_recall_preserves_raw_case_and_apostrophe_consumption() {
+    let directory = StateDirectory::new();
+    let original = Arc::new(Decoder::new(
+        Dictionary::from_rime_reader(Cursor::new("...\n泥\tni\t10\n好\thao\t100\n")).unwrap(),
+    ));
+    let changed = Arc::new(Decoder::new(
+        Dictionary::from_rime_reader(Cursor::new("...\n你\tni\t100\n好\thao\t100\n")).unwrap(),
+    ));
+    let mut writer = directory.writer(true);
+    let mut session = Session::new(original, Some(writer.learning.clone()));
+    session.insert("NI'hao").unwrap();
+    choose(&mut session, "泥", 3);
+    assert_eq!(session.input(), "hao");
+    writer.finish().unwrap();
+    assert_eq!(
+        directory.snapshot()["rows"],
+        serde_json::json!([{"input": "NI'", "text": "泥", "count": 1}])
+    );
+    let mut writer = directory.writer(true);
+    for input in ["NI'", "NI'hao"] {
+        let mut session = Session::new(changed.clone(), Some(writer.learning.clone()));
+        session.insert(input).unwrap();
+        let candidate = session
+            .candidates()
+            .iter()
+            .find(|candidate| candidate.text == "泥")
+            .unwrap();
+        assert_eq!(candidate.source, CandidateSource::User);
+        assert_eq!(candidate.consumed, 3);
+        choose(&mut session, "泥", 3);
+        assert_eq!(session.input(), &input[3..]);
+    }
+    for input in ["NI", "ni'", "ni'hao", "NIhao"] {
+        let mut session = Session::new(changed.clone(), Some(writer.learning.clone()));
+        session.insert(input).unwrap();
+        assert!(
+            session
+                .candidates()
+                .iter()
+                .all(|candidate| candidate.text != "泥"),
+            "input={input}"
+        );
+    }
+    writer.finish().unwrap();
+}
+
+#[test]
+fn single_initial_choice_persists_without_leaking_into_longer_input_or_training_completions() {
+    let decoder = Arc::new(Decoder::new(
+        Dictionary::from_rime_reader(Cursor::new(
+            "...\n了\tle\t1000\n来\tlai\t100\n拉\tla\t90\n里\tli\t80\n梁\tliang\t70\n",
+        ))
+        .unwrap(),
+    ));
+    for contextual in [false, true] {
+        let directory = StateDirectory::new();
+        let mut writer = directory.writer(contextual);
+        let mut session = Session::new(decoder.clone(), Some(writer.learning.clone()));
+        session.set_context("我马上");
+        session.insert("l").unwrap();
+        assert_eq!(session.candidates()[0].text, "了");
+        assert_eq!(
+            session.candidates()[0].source,
+            CandidateSource::ExactDictionary
+        );
+        choose(&mut session, "来", 1);
+        session.reset();
+        session.insert("li").unwrap();
+        let completion = session
+            .candidates()
+            .iter()
+            .position(|c| c.text == "梁")
+            .unwrap();
+        assert_eq!(
+            session.candidates()[completion].source,
+            CandidateSource::Completion
+        );
+        assert_eq!(session.select(completion).as_deref(), Some("梁"));
+        session.reset();
+        session.insert("l").unwrap();
+        assert_eq!(session.commit_raw().as_deref(), Some("l"));
+        writer.finish().unwrap();
+        let saved = directory.snapshot();
+        assert_eq!(
+            saved["rows"],
+            serde_json::json!([{"input":"l", "text":"来", "count":1}])
+        );
+        assert_eq!(saved["updates"], u64::from(contextual));
+
+        let mut writer = directory.writer(contextual);
+        let mut session = Session::new(decoder.clone(), Some(writer.learning.clone()));
+        session.insert("l").unwrap();
+        assert_eq!(session.candidates()[0].text, "来");
+        assert_eq!(session.candidates()[0].source, CandidateSource::User);
+        for suffix in ["a", "i"] {
+            session.insert(suffix).unwrap();
+            let mut baseline = Session::new(decoder.clone(), None);
+            baseline.insert(session.input()).unwrap();
+            assert_eq!(menu(&session), menu(&baseline), "{}", session.input());
+            assert!(
+                session
+                    .candidates()
+                    .iter()
+                    .all(|c| c.consumed != 1 || c.source != CandidateSource::User)
+            );
+        }
+        session.reset();
+        session.insert("L").unwrap();
+        assert_eq!(
+            session.candidates()[0].text,
+            "了",
+            "raw case remains separate"
+        );
+        writer.finish().unwrap();
+        assert_eq!(directory.snapshot(), saved);
+    }
+}
+
+#[test]
+fn personal_recall_requires_valid_input_even_when_the_public_pool_is_empty() {
+    let directory = StateDirectory::new();
+    let original = Arc::new(Decoder::new(
+        Dictionary::from_rime_reader(Cursor::new("...\n你好\tni hao\t100\n")).unwrap(),
+    ));
+    let changed = Arc::new(Decoder::new(
+        Dictionary::from_rime_reader(Cursor::new("...\n字\tzi\t100\n")).unwrap(),
+    ));
+    assert!(changed.decode("nihao").is_empty());
+    let mut writer = directory.writer(true);
+    let mut session = Session::new(original, Some(writer.learning.clone()));
+    session.insert("nihao").unwrap();
+    choose(&mut session, "你好", 5);
+    let mut session = Session::new(changed, Some(writer.learning.clone()));
+    session.insert("nihao").unwrap();
+    assert_eq!(session.candidates()[0].text, "你好");
+    assert_eq!(session.candidates()[0].source, CandidateSource::User);
+    for input in ["nihao''", "'nihao", "ni''hao", "nihao'''", "''", ""] {
+        session.reset();
+        for byte in input.bytes() {
+            session.insert(&char::from(byte).to_string()).unwrap();
+        }
+        assert!(session.candidates().is_empty(), "{input}");
+        assert_eq!(session.select(0), None, "{input}");
+        assert_eq!(session.input(), input);
+    }
+    session.reset();
+    session.insert("nihao").unwrap();
+    assert_eq!(
+        session.candidates()[0].text,
+        "你好",
+        "valid input recovers after invalid edits"
+    );
+    writer.finish().unwrap();
+    assert_eq!(
+        directory.snapshot()["rows"],
+        serde_json::json!([{"input":"nihao", "text":"你好", "count":1}])
+    );
+}
