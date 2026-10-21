@@ -1,4 +1,5 @@
-# CPU-only supervised candidate ranking.
+# CPU training; install an XPU PyTorch build separately for Intel GPU training.
 --extra-index-url https://download.pytorch.org/whl/cpu
 torch==2.14.1+cpu
 safetensors==0.8.0
+numpy==2.5.4

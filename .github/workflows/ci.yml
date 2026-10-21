@@ -44,9 +44,12 @@ jobs:
       - name: Check private IBus protocol
         run: /usr/bin/python3 scripts/test_ibus.py target/release/yanliu-ibus
 
-      - name: Check offline teacher and training data tools
+      - name: Check offline teacher, corpus and CPU training tools
         run: |
           python3 -m venv .cache/ime-lab
-          .cache/ime-lab/bin/python -m pip install -r scripts/ime-lab-requirements.txt
+          .cache/ime-lab/bin/python -m pip install -r scripts/ime-lab-requirements.txt -r scripts/corpus-requirements.txt -r scripts/training-requirements.txt
           .cache/ime-lab/bin/python -m unittest discover -s tests -p test_ime_lab.py
+          .cache/ime-lab/bin/python -m unittest discover -s tests -p test_prepare_general_corpus.py
+          .cache/ime-lab/bin/python -m unittest discover -s tests -p test_build_ranking_corpus.py
+          .cache/ime-lab/bin/python -m unittest discover -s tests -p test_pretrain_model.py
           .cache/ime-lab/bin/python -m unittest discover -s tests -p test_train_ranker.py

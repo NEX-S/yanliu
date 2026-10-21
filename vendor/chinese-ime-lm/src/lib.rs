@@ -370,6 +370,10 @@ impl SentenceModel {
         self.config.context
     }
 
+    pub fn contains_character(&self, character: char) -> bool {
+        self.index.contains_key(&character)
+    }
+
     fn encode(&self, text: &str) -> Vec<u32> {
         text.chars()
             .map(|ch| self.index.get(&ch).copied().unwrap_or(UNK))

@@ -37,7 +37,7 @@ OPENAI_BASE_URL="${ANTHROPIC_BASE_URL%/anthropic}/openai" \
 
 ## 训练排序模型
 
-`scripts/train_ranker.py` 用明确提供的公开 train/dev JSONL 和实际 CLI 候选做 CPU 监督训练，不读取系统学习，不向召回补入答案。训练分数包含当前词库静态差和首选提升门槛；每轮导出 f32/int8 并通过实际 CLI 比较开发集，按拼音相关组等权首选命中选择 checkpoint，包含未更新的 epoch 0，平局选更早的轮次。没有收益时保留原模型。
+`scripts/train_ranker.py` 用明确提供的 train/dev JSONL 和实际 CLI 候选做监督训练，默认 CPU/fp32，不读取系统学习，不向召回补入答案。训练分数包含当前词库静态差和首选提升门槛；每轮导出 f32/int8 并通过实际 CLI 比较开发集，按 `group_id`（未提供时按拼音）等权首选命中选择 checkpoint，包含未更新的 epoch 0，平局选更早的轮次。F32 输入的 epoch 0 是其实际 int8 导出；int8 输入另检查原模型与 epoch 0 的逐例结果一致。没有收益时保留原模型。
 
 ```sh
 python3 -m venv .cache/yanliu-training
@@ -49,7 +49,54 @@ python3 -m venv .cache/yanliu-training
 .cache/yanliu-training/bin/python -m unittest discover -s tests -p test_train_ranker.py
 ```
 
-输出绑定初始模型、数据、当前源码、binary 和词库哈希，保留训练排除原因、完整开发分母、逐例收益与退化及候选身份检查。train/dev 的相同拼音或目标不得交叉，相关前文也应先归入同组；最终留出不传给训练命令。checkpoint 选择不自动安装模型，更换交付模型前还须检查未观测留出、已有回归、逐键成本和所选设备的同源 IR。
+输出绑定初始模型、数据、当前源码、binary 和词库哈希，保留训练排除原因、完整开发分母、逐例收益与退化及候选身份检查。先按会话、生成响应及实质复制内容划分来源组，案例可用 `source_group` 标记：同源组与规范化的完整 `(input, context, gold)` 重复不能跨 train/dev。同一常用词在独立来源的新语境中可以跨 split；工具不会代替来源分组和长文本近复制清理。最终留出不传给训练命令。checkpoint 选择不自动安装模型，更换交付模型前还须检查未观测留出、已有回归、逐键成本和所选设备的同源 IR。私人对话及其派生模型保留在本地，不能因项目开源而自动公开。
+
+### 从随机权重训练
+
+`scripts/pretrain_model.py` 对每行独立的 UTF-8 段落做下一字符预训练。`--spec` 指定 JSON 文件，其中 `config` 包含 `vocab/n_layer/n_head/n_embd/context/dropout`，`vocab` 是以 `<pad>/<unk>/<bos>` 开头的完整字符表，`provenance` 声明 `license/data_classification/attribution` 及实际数据来源。全部参数随机初始化。字符表应在训练前核对常用字覆盖，开发文本须来自独立来源组；按完整开发集 CE 保留最佳 F32 权重。默认最多 12 遍、3 亿有效目标字符或 6 小时，先到即停，开发 CE 连续两次不改善也会停止；这些预算可通过参数调整。
+
+Intel GPU 需要单独的 XPU 环境，按 [PyTorch Intel GPU 指南](https://docs.pytorch.org/docs/2.14/notes/get_start_xpu.html)安装对应构建，并安装 `numpy==2.5.4`、`safetensors==0.8.0`；不要把上述 CPU requirements 安装进 XPU 环境。请求 XPU 而设备不可用时直接报错，不回退 CPU。当前 NPU 路径用于推理。
+
+```sh
+ONEAPI_DEVICE_SELECTOR=level_zero:gpu /path/to/xpu-env/bin/python scripts/pretrain_model.py \
+  --train /path/to/text-train.txt --dev /path/to/text-dev.txt \
+  --spec /path/to/model-spec.json \
+  --output-dir results/pretraining-run-001 \
+  --device xpu --precision bf16 --batch 16 --lr 3e-4 \
+  --epochs 12 --max-tokens 300000000 --max-seconds 21600
+
+ONEAPI_DEVICE_SELECTOR=level_zero:gpu /path/to/xpu-env/bin/python scripts/train_ranker.py \
+  --model results/pretraining-run-001/best-f32.safetensors \
+  --binary target/release/yanliu \
+  --train /path/to/ranking-train.jsonl --dev /path/to/ranking-dev.jsonl \
+  --text-train /path/to/text-train.txt --text-batch 16 \
+  --device xpu --precision bf16 --epochs 2 --lr 1e-5 \
+  --output-dir results/ranking-run-001
+```
+
+排序时 `--text-train` 为每次更新加入一批普通文本 CE，与排序 CE 系数均为 1，训练文本仍服从相同来源拆分。文本每个已知字符只作一次目标，不跨段拼接；PAD 和 UNK 均不计损失，UNK 仍保留在输入上下文中。recipe 分别记录源字符数、有效目标数、未知字符和 padding，以及设备、精度和来源哈希。从零训练产物的归因来自 spec 中的实际来源声明。
+
+### 准备公共中文语料
+
+`scripts/prepare_general_corpus.py` 使用固定版本的 LCCC 日常对话、中文 Wikipedia、COIG-CQIA 人类回答与 TNEWS 标题。原始文件须先放到 `data/cache/general-model-20261021/sources/`，文件名、上游版本和地址见脚本中的 `SOURCE_FILES`；同目录的 `1.txt/2.txt/3.txt` 分别提供 3500、3000、1605 个规范汉字，可从[固定版本的字表抄录](https://gist.github.com/z-rui/4cb3431f2bcf26ea39cd569a58e66003/5c4510138344632327abcf966195aa8314e5c84b)获取。数据准备使用独立环境：
+
+```sh
+python3 -m venv .cache/yanliu-corpus
+.cache/yanliu-corpus/bin/python -m pip install -r scripts/corpus-requirements.txt
+.cache/yanliu-corpus/bin/python scripts/prepare_general_corpus.py \
+  --output data/cache/general-model-20261021/corpus \
+  --evidence results/general-model-20261021/data-preparation
+.cache/yanliu-corpus/bin/python scripts/build_ranking_corpus.py \
+  --documents data/cache/general-model-20261021/corpus/documents.jsonl \
+  --output-dir data/cache/general-model-20261021 \
+  --evidence-dir results/general-model-20261021
+```
+
+准备程序先按完整会话、页面或问题分配 train/dev/holdout，再清洗、规范化去重与排除已有公开评测内容。训练文本保留中文标点；词表包含全部 8105 规范汉字、词库单字、ASCII、固定标点和训练集高频扩展字符。`data-recipe.json` 保留来源哈希、规则、各来源数量、字符覆盖、实际训练频次覆盖与 OOV 统计；`small-spec.json` 和 `large-spec.json` 共享同一词表，可直接传给预训练的 `--spec`。
+
+排序案例继承原文档 split，先按固定 hash 和来源预算选样，再对完整连续汉字段注音后截取目标。它不调用模型、不按召回或成绩挑样，实际数量不足时如实记录。自动拼音仍可能误读多音字，因此这些案例是自动监督数据。`ranking-dev.jsonl` 用于选模；`ranking-holdout.jsonl` 和 `corpus/holdout.txt` 保留至训练与策略冻结后评估，不传给训练入口。
+
+构建排序案例默认使用仓库内的 `data/eval/*.jsonl` 排除已有评测查询；需要额外排除时可重复传入 `--exclude PATH`，显式指定的文件必须存在。额外文件的路径和 SHA-256 会进入配方，不会自动扫描本地 `results/` 或个人数据。
 
 ## 验证
 
@@ -83,4 +130,6 @@ Agent 从 [AGENTS.md](../AGENTS.md) 进入。
 
 完整单音节另保留词典中所有同音单字符词条，供翻页选择；例如 `ji` 不会因为组合 beam 截断而选不到“吉”。这部分不扩大组合搜索，直接读取已加载的同音词条，保留真实消费量、来源和静态分数，因此单音节菜单可超过普通候选预算。`ji'` 仍完整消费原始 3 字节。首个音节以单引号明确分隔时，也保留该音节的全部同音单字符：例如 `ji'cheng` 可翻页选“吉”，消费 `ji'` 的 3 字节并保留 `cheng`，无需清空重输。内部音节边界不被忽略，也不会把没有分隔符的长串扩展为所有隐式前缀。学习与普通转换仍优先于纠错。
 
-排序从至多九个完整候选中尝试提升一个候选，其余候选保持相对顺序。默认保护学习首选与无上下文的词库精确首选；部分候选和 Completion 不参与提升。词库精确词或明确选择处于首位时，静态分较弱的候选需要更多语言证据才能被提升，避免小模型的固有词形偏好轻易压过词频；组合路径的分数含分词成本，不用这项词频约束。无上下文时，语境学习开关不会单独解除公共语言模型的首选保护，个人条件分仍可纠正首选。Session 另保持普通完整转换优先于完整纠错。模型只改变顺序，不改变文本、来源、原始消费字节或静态分数。字符词表不能区分拉丁字母；实际评分组含“B站”这类中文词条时，语言先验整组中性，个人条件特征仍可学习。字符语言模型只评分窗口内的完整候选：窗口来自模型配置，默认 4M 模型最多 63 字符（另留首标记）。超长组的语言先验置为中性；个人条件特征仍读取完整文本，不把截断前缀当成完整候选评分。
+排序从至多九个完整候选中尝试提升一个候选，其余候选保持相对顺序。默认保护学习首选与无上下文的词库精确首选；部分候选和 Completion 不参与提升。词库精确词或明确选择处于首位时，静态分较弱的候选需要更多语言证据才能被提升，避免小模型的固有词形偏好轻易压过词频；组合路径的分数含分词成本，不用这项词频约束。无上下文时，语境学习开关不会单独解除公共语言模型的首选保护，个人条件分仍可纠正首选。Session 另保持普通完整转换优先于完整纠错。模型只改变顺序，不改变文本、来源、原始消费字节或静态分数。实际评分组含“B站”这类带拉丁字母的词条时，当前运行时将语言先验整组置为中性，个人条件特征仍可学习。字符语言模型只评分窗口内的完整候选：窗口来自模型配置，默认 4M 模型最多 63 字符（另留首标记）。超长组的语言先验置为中性；个人条件特征仍读取完整文本，不把截断前缀当成完整候选评分。
+
+词表外候选的语言分与当前首选持平，只保留静态词频和个人选择带来的区别，避免共享 UNK 概率错误提升生僻字。首选本身含词表外字符，或可完整表示的候选不足两个时，整组语言先验为中性。明确选择这些候选仍参与本地偏好学习。

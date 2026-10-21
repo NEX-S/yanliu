@@ -70,11 +70,11 @@
       "license": "Apache-2.0",
       "sha256": "826099e3b0b96a8a4d95a9705b9eba024dee17e2f7179fea2f495c0a5a7df1c8",
       "size": 48330,
-      "effective_sha256": "b6cd88ea19107f5f84773cee0663aee063657ebc1d754d137665ebdb815f344d",
-      "effective_size": 48823,
+      "effective_sha256": "ef26f8b7c0dd0c250889880cb97c3ed6d5873ff5d9b483d94c3c6411b055f4ff",
+      "effective_size": 48938,
       "local_patch": {
         "path": "vendor/chinese-ime-lm/yanliu.patch",
-        "sha256": "c659b6f75ebb8a21a9265ab34d5c1612693efd066613e1eeb6fc730fb663e703"
+        "sha256": "afb5ef2984ebacfddc74cb10be0357f63b440f48985f0e58859b8c3625006d92"
       }
     },
     {

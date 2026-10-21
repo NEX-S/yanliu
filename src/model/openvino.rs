@@ -5,6 +5,7 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::{
     collections::HashMap,
+    io::Read,
     path::{Path, PathBuf},
     sync::Mutex,
 };
@@ -50,38 +51,39 @@ impl Ranker {
         if info.format != "yanliu-ranker-ir-v1" {
             return Err(format!("{}: unsupported OpenVINO ranker metadata", path.display()).into());
         }
-        let model = checked_bytes(source, &info.source_sha256)?;
-        let length = u64::from_le_bytes(
-            model
-                .get(..8)
-                .ok_or("truncated safetensors header")?
-                .try_into()?,
-        );
-        let header: Value = serde_json::from_slice(
-            model
-                .get(8..)
-                .and_then(|rest| rest.get(..usize::try_from(length).ok()?))
-                .ok_or("truncated safetensors header")?,
-        )?;
-        let vocab: Vec<String> = serde_json::from_str(
-            header["__metadata__"]["vocab"]
-                .as_str()
-                .ok_or("source model has no vocabulary")?,
-        )?;
-        // Same mapping as the CPU model: reserved tokens are spelled `<pad>` and never match a character.
-        let index = vocab
-            .iter()
-            .enumerate()
-            .filter_map(|(token, text)| {
-                let mut chars = text.chars();
-                match (chars.next(), chars.next()) {
-                    (Some(ch), None) => Some((ch, token as i64)),
-                    _ => None,
-                }
-            })
-            .collect();
+        let index = {
+            let model = checked_bytes(source, &info.source_sha256)?;
+            let length = u64::from_le_bytes(
+                model
+                    .get(..8)
+                    .ok_or("truncated safetensors header")?
+                    .try_into()?,
+            );
+            let header: Value = serde_json::from_slice(
+                model
+                    .get(8..)
+                    .and_then(|rest| rest.get(..usize::try_from(length).ok()?))
+                    .ok_or("truncated safetensors header")?,
+            )?;
+            let vocab: Vec<String> = serde_json::from_str(
+                header["__metadata__"]["vocab"]
+                    .as_str()
+                    .ok_or("source model has no vocabulary")?,
+            )?;
+            // Reserved tokens such as `<pad>` never match a character, as on CPU.
+            vocab
+                .iter()
+                .enumerate()
+                .filter_map(|(token, text)| {
+                    let mut chars = text.chars();
+                    match (chars.next(), chars.next()) {
+                        (Some(ch), None) => Some((ch, token as i64)),
+                        _ => None,
+                    }
+                })
+                .collect()
+        };
         let xml = checked_bytes(&source.with_extension("xml"), &info.xml_sha256)?;
-        let bin = checked_bytes(&source.with_extension("bin"), &info.bin_sha256)?;
         let library = runtime_dir.join("libopenvino_c.so");
         let library = library
             .canonicalize()
@@ -105,14 +107,29 @@ impl Ranker {
             *loaded = Some((library, dependencies));
         }
         drop(loaded);
+        let path = source.with_extension("bin");
+        let weights = (|| -> Result<_> {
+            let mut file = std::fs::File::open(&path)?;
+            let length = file.metadata()?.len().try_into()?;
+            let mut weights = Tensor::new(ElementType::U8, &Shape::new(&[length])?)?;
+            let bytes = weights.get_data_mut::<u8>()?;
+            file.read_exact(bytes)?;
+            if file.read(&mut [0])? != 0 {
+                return Err("ranker weights changed length during reading".into());
+            }
+            if format!("{:x}", Sha256::digest(bytes)) != info.bin_sha256 {
+                return Err("SHA-256 does not match ranker metadata".into());
+            }
+            Ok(weights)
+        })()
+        .map_err(|error| format!("{}: {error}", path.display()))?;
         let mut core = Core::new()?;
         core.set_property(&device, &RwPropertyKey::HintPerformanceMode, "LATENCY")?;
         if device == DeviceType::GPU {
             core.set_property(&device, &RwPropertyKey::HintInferencePrecision, "f32")?;
         }
-        let mut weights = Tensor::new(ElementType::U8, &Shape::new(&[bin.len().try_into()?])?)?;
-        weights.get_data_mut::<u8>()?.copy_from_slice(&bin);
         let model = core.read_model_from_buffer(&xml, Some(&weights))?;
+        drop(xml);
         if model.get_inputs_len()? != 2 || model.get_outputs_len()? != 1 {
             return Err("ranker IR must have two inputs and one output".into());
         }
@@ -165,6 +182,10 @@ impl Ranker {
             mask,
             index,
         })
+    }
+
+    pub(super) fn contains_character(&self, character: char) -> bool {
+        self.index.contains_key(&character)
     }
 
     pub(super) fn log_probabilities(

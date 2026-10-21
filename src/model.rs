@@ -106,13 +106,38 @@ impl Model {
         }) {
             return Ok(vec![0.0; texts.len()]);
         }
-        let scores = match &mut self.backend {
-            Backend::Cpu(reranker) => reranker.log_probabilities(context, texts),
+        let known: Vec<_> = texts
+            .iter()
+            .enumerate()
+            .filter_map(|(index, text)| {
+                text.chars()
+                    .all(|character| match &self.backend {
+                        Backend::Cpu(reranker) => reranker.model().contains_character(character),
+                        #[cfg(feature = "accelerator")]
+                        Backend::Accelerator(ranker) => ranker.contains_character(character),
+                    })
+                    .then_some(index)
+            })
+            .collect();
+        // UNK describes every missing character together, not the specific candidate. Without
+        // a representable leader there is no comparable language prior for a promotion.
+        if known.first() != Some(&0) || known.len() < 2 {
+            return Ok(vec![0.0; texts.len()]);
+        }
+        let known_texts: Vec<_> = known.iter().map(|&index| texts[index]).collect();
+        let known_scores = match &mut self.backend {
+            Backend::Cpu(reranker) => reranker.log_probabilities(context, &known_texts),
             #[cfg(feature = "accelerator")]
-            Backend::Accelerator(ranker) => ranker.log_probabilities(context, texts)?,
+            Backend::Accelerator(ranker) => ranker.log_probabilities(context, &known_texts)?,
         };
-        if !scores.iter().all(|score| score.is_finite()) {
+        if !known_scores.iter().all(|score| score.is_finite()) {
             return Err("nonfinite language score for full-input candidate".into());
+        }
+        // An unrepresented candidate gets no language advantage over the leader; dictionary
+        // evidence and explicit personal choices still apply to it.
+        let mut scores = vec![known_scores[0]; texts.len()];
+        for (&index, score) in known.iter().zip(known_scores) {
+            scores[index] = score;
         }
         Ok(scores)
     }
@@ -330,6 +355,51 @@ mod tests {
                 .unwrap(),
             None
         );
+    }
+
+    #[test]
+    fn unknown_characters_have_no_language_advantage_over_the_leader() {
+        let mut model = model();
+        let known = model.language_scores("出", &["如", "入"]).unwrap();
+        let mixed = model.language_scores("出", &["如", "乳", "入"]).unwrap();
+        assert_eq!(mixed, vec![known[0], known[0], known[1]]);
+        assert!(
+            known[1] > known[0],
+            "known homophones must still use context"
+        );
+        assert_eq!(
+            model.language_scores("出", &["乳", "如", "入"]).unwrap(),
+            vec![0.0; 3]
+        );
+        let scores = model.language_scores("好", &["对", "㨃", "𬭚"]).unwrap();
+        assert_eq!(scores, vec![0.0; 3]);
+    }
+
+    #[test]
+    fn an_explicit_unknown_character_choice_still_learns() {
+        let decoder = Arc::new(Decoder::new(
+            Dictionary::from_rime_reader(Cursor::new(
+                "...\n如\tru\t4308194\n乳\tru\t68901\n入\tru\t1000000\n",
+            ))
+            .unwrap(),
+        ));
+        let learning = Arc::new(Learning::new(true));
+        let mut model = model();
+        let mut session = Session::new(decoder, Some(learning));
+        session.set_context("牛");
+        session.insert("ru").unwrap();
+        let chosen = session
+            .candidates()
+            .iter()
+            .position(|candidate| candidate.text == "乳")
+            .unwrap();
+        session.select(chosen).unwrap();
+        session.reset();
+        session.set_context("牛");
+        session.insert("ru").unwrap();
+        assert_eq!(session.candidates()[0].text, "乳");
+        assert_eq!(session.candidates()[0].source, CandidateSource::User);
+        assert_eq!(model.promotion(&session.snapshot()).unwrap(), None);
     }
 
     #[test]

@@ -1,4 +1,4 @@
-use crate::dictionary::{Dictionary, Entry};
+use crate::dictionary::{Dictionary, Entry, Rows};
 use std::{
     cmp::Reverse,
     collections::{HashMap, HashSet},
@@ -157,15 +157,14 @@ impl Decoder {
                     self.dictionary.exact(&key[start..end])
                 };
                 for entry in matched
-                    .iter()
                     .filter(|entry| allowed(entry, start, end, boundaries))
                     .take(SPAN_ENTRIES)
                 {
                     for state in previous {
                         if end == n {
-                            offer(&mut mixed, state, entry, false);
+                            offer(&mut mixed, state, &entry, false);
                         }
-                        offer(exact, state, entry, false);
+                        offer(exact, state, &entry, false);
                     }
                 }
                 if end == n {
@@ -176,7 +175,7 @@ impl Decoder {
                         .take(SPAN_ENTRIES)
                     {
                         for state in previous {
-                            offer(&mut mixed, state, entry, true);
+                            offer(&mut mixed, state, &entry, true);
                         }
                     }
                 }
@@ -197,9 +196,9 @@ impl Decoder {
                     .filter(|entry| abbreviation_matches(entry, &pieces))
                 {
                     if end == n {
-                        offer(&mut mixed, &root, entry, false);
+                        offer(&mut mixed, &root, &entry, false);
                     }
-                    offer(exact, &root, entry, false);
+                    offer(exact, &root, &entry, false);
                 }
             }
         }
@@ -226,17 +225,17 @@ impl Decoder {
         let mut push = |edited: &[u8], source: &dyn Fn(Vec<u16>) -> CandidateSource| {
             let consumed = raw_ends[edited.len()];
             let edited = std::str::from_utf8(edited).expect("edits keep ASCII");
-            for entry in self.dictionary.exact(edited).iter().take(SPAN_ENTRIES) {
-                if allowed(entry, 0, edited.len(), boundaries)
+            for entry in self.dictionary.exact(edited).take(SPAN_ENTRIES) {
+                if allowed(&entry, 0, edited.len(), boundaries)
                     && !candidates
                         .iter()
-                        .any(|c| c.text == *entry.text && c.consumed == consumed)
+                        .any(|c| c.text == entry.text && c.consumed == consumed)
                 {
                     candidates.push(Candidate {
                         text: entry.text.to_string(),
                         consumed,
                         source: source(entry.ends.to_vec()),
-                        score: extended_score(0.0, entry, false),
+                        score: extended_score(0.0, &entry, false),
                     });
                     if candidates.len() == limit {
                         return true;
@@ -314,17 +313,17 @@ impl Decoder {
                     let boundaries = scan_input(&corrected)
                         .expect("insertion preserves scanner invariants")
                         .boundaries;
-                    for (row, entry) in rows.iter().take(SPAN_ENTRIES).enumerate() {
-                        if !allowed(entry, 0, end + 1, &boundaries)
+                    for (row, entry) in rows.clone().take(SPAN_ENTRIES).enumerate() {
+                        if !allowed(&entry, 0, end + 1, &boundaries)
                             || candidates
                                 .iter()
-                                .any(|c| c.text == *entry.text && c.consumed == consumed)
+                                .any(|c| c.text == entry.text && c.consumed == consumed)
                         {
                             continue;
                         }
                         let priority = (Reverse(consumed), p, to, at, row);
                         let completion = at == consumed;
-                        let score = extended_score(0.0, entry, completion);
+                        let score = extended_score(0.0, &entry, completion);
                         let compare = |(old_priority, old): &(Priority, Candidate)| {
                             old_priority
                                 .0
@@ -334,7 +333,7 @@ impl Decoder {
                         };
                         if let Some(i) = picks
                             .iter()
-                            .position(|(_, c)| c.text == *entry.text && c.consumed == consumed)
+                            .position(|(_, c)| c.text == entry.text && c.consumed == consumed)
                         {
                             if compare(&picks[i]).is_le() {
                                 continue;
@@ -382,7 +381,7 @@ impl Decoder {
             if entry.ends.len() != 1
                 || entry.text.chars().count() != 1
                 || candidates.iter().any(|old| {
-                    old.text == *entry.text
+                    old.text == entry.text
                         && old.consumed == consumed
                         && old.source != CandidateSource::Completion
                 })
@@ -393,7 +392,7 @@ impl Decoder {
                 text: entry.text.to_string(),
                 consumed,
                 source: CandidateSource::ExactDictionary,
-                score: extended_score(0.0, entry, false),
+                score: extended_score(0.0, &entry, false),
             });
         }
     }
@@ -439,16 +438,14 @@ fn scan_input(input: &str) -> Option<ScannedInput<'_>> {
 }
 /// Reserve direct lexical readings alongside composition: a different
 /// syllabification must not disappear solely because its beam score is lower.
-fn reserve_readings<'a>(exact_full: &'a [Entry], input: &ScannedInput<'_>) -> Vec<&'a Entry> {
-    let eligible = exact_full
-        .iter()
-        .filter(|entry| allowed(entry, 0, input.key.len(), &input.boundaries));
+fn reserve_readings<'a>(exact_full: Rows<'a>, input: &ScannedInput<'_>) -> Vec<Entry<'a>> {
+    let eligible = exact_full.filter(|entry| allowed(entry, 0, input.key.len(), &input.boundaries));
     // Two representatives retain alternatives sharing one syllabification.
     let mut readings = HashMap::new();
     let diverse = eligible
         .clone()
         .filter(|entry| {
-            let count = readings.entry(entry.ends.as_ref()).or_insert(0usize);
+            let count = readings.entry(entry.ends).or_insert(0usize);
             *count += 1;
             *count <= READING_REPRESENTATIVES
         })
@@ -464,7 +461,7 @@ struct Pick<'a> {
 fn assemble_picks(
     mixed: &[State],
     beams: &[Vec<State>],
-    reserved: &[&Entry],
+    reserved: &[Entry<'_>],
     input: &ScannedInput<'_>,
 ) -> Vec<Candidate> {
     let n = input.key.len();
@@ -486,7 +483,7 @@ fn assemble_picks(
         }));
     }
     picks.extend(reserved.iter().map(|entry| Pick {
-        text: &entry.text,
+        text: entry.text,
         consumed: full_len,
         source: CandidateSource::ExactDictionary,
         score: extended_score(0.0, entry, false),
@@ -501,7 +498,7 @@ fn assemble_picks(
     picks.retain(|pick| seen.insert((pick.text, pick.consumed)));
     // Full conversions leave room for prefix selections, but reserved readings
     // always keep their slots.
-    let reserved: HashSet<&str> = reserved.iter().map(|entry| entry.text.as_ref()).collect();
+    let reserved: HashSet<&str> = reserved.iter().map(|entry| entry.text).collect();
     let (full, partial): (Vec<_>, Vec<_>) = picks
         .into_iter()
         .partition(|pick| pick.consumed == full_len);
@@ -530,7 +527,7 @@ fn assemble_picks(
         })
         .collect()
 }
-fn allowed(entry: &Entry, start: usize, end: usize, boundaries: &[usize]) -> bool {
+fn allowed(entry: &Entry<'_>, start: usize, end: usize, boundaries: &[usize]) -> bool {
     boundaries
         .iter()
         .all(|&b| b <= start || b > end || entry.ends.contains(&((b - start) as u16)))
@@ -571,7 +568,7 @@ fn abbreviation<'a>(
         .any(|&(_, complete)| !complete)
         .then_some(pieces)
 }
-fn abbreviation_matches(entry: &Entry, pieces: &[(&str, bool)]) -> bool {
+fn abbreviation_matches(entry: &Entry<'_>, pieces: &[(&str, bool)]) -> bool {
     entry.ends.len() == pieces.len()
         && entry
             .syllables()
@@ -584,7 +581,7 @@ fn abbreviation_matches(entry: &Entry, pieces: &[(&str, bool)]) -> bool {
                 }
             })
 }
-fn extended_score(parent_score: f32, entry: &Entry, completion: bool) -> f32 {
+fn extended_score(parent_score: f32, entry: &Entry<'_>, completion: bool) -> f32 {
     parent_score + (entry.weight + 1.0).ln() / 14.0 - 2.0 - if completion { 0.8 } else { 0.0 }
 }
 fn ranks_before(a: &State, b: &State) -> bool {
@@ -593,7 +590,7 @@ fn ranks_before(a: &State, b: &State) -> bool {
         .then(a.text.cmp(&b.text))
         .is_lt()
 }
-fn offer(states: &mut Vec<State>, parent: &State, entry: &Entry, completion: bool) {
+fn offer(states: &mut Vec<State>, parent: &State, entry: &Entry<'_>, completion: bool) {
     let score = extended_score(parent.score, entry, completion);
     // A full beam drops a lower extension before building its text, unless the
     // extension would replace a completion with the same text.
@@ -601,14 +598,13 @@ fn offer(states: &mut Vec<State>, parent: &State, entry: &Entry, completion: boo
         && score.total_cmp(&states[BEAM - 1].score).is_lt()
         && (completion
             || !states.iter().any(|state| {
-                state.completion
-                    && state.text.strip_prefix(&parent.text) == Some(entry.text.as_ref())
+                state.completion && state.text.strip_prefix(&parent.text) == Some(entry.text)
             }))
     {
         return;
     }
     let mut text = parent.text.clone();
-    text.push_str(&entry.text);
+    text.push_str(entry.text);
     push_state(
         states,
         State {
@@ -709,14 +705,13 @@ mod tests {
             let entry = d
                 .dictionary
                 .exact("de")
-                .iter()
-                .find(|entry| *entry.text == candidate.text)
+                .find(|entry| entry.text == candidate.text)
                 .unwrap();
             assert_eq!(candidate.consumed, 1);
             assert_eq!(candidate.source, CandidateSource::Completion);
             assert_eq!(
                 candidate.score.to_bits(),
-                extended_score(0.0, entry, true).to_bits()
+                extended_score(0.0, &entry, true).to_bits()
             );
         }
     }
@@ -872,12 +867,14 @@ mod tests {
             push_state(&mut beam, state(&format!("x{i}"), 10.0, 1, false));
         }
         let parent = state("a", -5.0, 1, false);
-        let entry = |text: &str| Entry {
-            text: text.into(),
-            key: "k".into(),
-            ends: Box::from([1u16]),
-            weight: 0.0,
-        };
+        fn entry(text: &str) -> Entry<'_> {
+            Entry {
+                text,
+                key: "k",
+                ends: &[1u16],
+                weight: 0.0,
+            }
+        }
         offer(&mut beam, &parent, &entry("c"), true);
         offer(&mut beam, &parent, &entry("b"), false);
         assert_eq!(beam.len(), BEAM);
@@ -1048,12 +1045,9 @@ mod tests {
             corrected.insert(*at, char::from(*to));
             let corrected = scan_input(&corrected).unwrap();
             assert!(
-                d.dictionary
-                    .exact(&corrected.key)
-                    .iter()
-                    .any(|e| e.text.as_ref() == text
-                        && e.ends.as_ref() == ends
-                        && allowed(e, 0, corrected.key.len(), &corrected.boundaries)),
+                d.dictionary.exact(&corrected.key).any(|e| e.text == text
+                    && e.ends == ends
+                    && allowed(&e, 0, corrected.key.len(), &corrected.boundaries)),
                 "{raw}"
             );
         }
@@ -1062,9 +1056,8 @@ mod tests {
             assert_eq!(
                 d.dictionary
                     .exact(&input.key)
-                    .iter()
-                    .any(|e| e.text.as_ref() == "你好"
-                        && allowed(e, 0, input.key.len(), &input.boundaries)),
+                    .any(|e| e.text == "你好"
+                        && allowed(&e, 0, input.key.len(), &input.boundaries)),
                 valid,
                 "{raw}"
             );
@@ -1322,14 +1315,9 @@ mod tests {
         for (raw, consumed) in [("ji", 2), ("ji'", 3), ("ji'cheng", 3)] {
             let menu = d.decode(raw);
             assert!(menu.len() > SPAN_ENTRIES, "{raw}");
-            for entry in d
-                .dictionary
-                .exact("ji")
-                .iter()
-                .filter(|e| e.ends.len() == 1)
-            {
+            for entry in d.dictionary.exact("ji").filter(|e| e.ends.len() == 1) {
                 if entry.text.chars().count() != 1 {
-                    assert!(menu.iter().all(|c| c.text != *entry.text), "{raw}");
+                    assert!(menu.iter().all(|c| c.text != entry.text), "{raw}");
                     continue;
                 }
                 // An earlier non-Completion tuple wins, such as the tail's missing-letter
@@ -1337,13 +1325,13 @@ mod tests {
                 let hit = menu
                     .iter()
                     .find(|c| {
-                        c.text == *entry.text
+                        c.text == entry.text
                             && c.consumed == consumed
                             && c.source != CandidateSource::Completion
                     })
                     .unwrap_or_else(|| panic!("{raw} {}", entry.text));
                 if hit.source == CandidateSource::ExactDictionary {
-                    let score = extended_score(0.0, entry, false);
+                    let score = extended_score(0.0, &entry, false);
                     assert_eq!(hit.score.to_bits(), score.to_bits(), "{raw} {}", entry.text);
                 }
             }

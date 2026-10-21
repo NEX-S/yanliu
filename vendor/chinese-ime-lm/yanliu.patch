@@ -150,7 +150,17 @@
              },
              self.cumulative[taken - 1],
          )
-@@ -411,13 +376,8 @@
+@@ -405,19 +370,18 @@
+         self.config.context
+     }
+ 
++    pub fn contains_character(&self, character: char) -> bool {
++        self.index.contains_key(&character)
++    }
++
+     fn encode(&self, text: &str) -> Vec<u32> {
+         text.chars()
+             .map(|ch| self.index.get(&ch).copied().unwrap_or(UNK))
              .collect()
      }
  
@@ -166,7 +176,7 @@
          if candidates.is_empty() {
              return Vec::new();
          }
-@@ -446,6 +406,7 @@
+@@ -446,6 +410,7 @@
          tokens
      }
  
@@ -174,7 +184,7 @@
      fn score_against(&self, prefix: &Prefix, candidates: &[&str]) -> Vec<f32> {
          candidates
              .iter()
-@@ -510,15 +471,17 @@
+@@ -510,15 +475,17 @@
          }
          let last = (tokens.len() - 1) * n_embd;
          let last_hidden = layer_norm(&x[last..], &self.final_weight, &self.final_bias, n_embd);
@@ -193,7 +203,7 @@
      fn score_tail(&self, prefix: &Prefix, tail: &[u32]) -> f32 {
          let run = self.run_tail(prefix, tail);
          run.cumulative[run.cumulative.len() - 1]
-@@ -583,7 +546,8 @@
+@@ -583,7 +550,8 @@
  
          // Position i predicts token i + 1. The opening character is therefore predicted by the last
          // prefix position, and every later one by the tail position before it.
@@ -203,7 +213,7 @@
          let mut cumulative = Vec::with_capacity(tail.len());
          cumulative.push(running);
          let mut hidden = Vec::with_capacity(tail.len());
-@@ -640,38 +604,10 @@
+@@ -640,38 +608,10 @@
      /// log P over the whole vocabulary for the state at `hidden`.
      fn distribution(&self, hidden: &[f32]) -> Vec<f32> {
          let n_embd = self.config.n_embd;
@@ -245,7 +255,7 @@
      }
  
      fn attention(&self, q: &[f32], k: &[f32], v: &[f32], rows: usize, offset: usize) -> Vec<f32> {
-@@ -748,74 +684,12 @@
+@@ -748,74 +688,12 @@
          &self.model
      }
  
@@ -320,7 +330,7 @@
          let longest = candidates
              .iter()
              .map(|text| text.chars().count())
-@@ -837,7 +711,14 @@
+@@ -837,7 +715,14 @@
          let (_, prefix) = self.cached.as_ref().expect("prefix was just computed");
          let n_embd = self.model.config.n_embd;
  
@@ -336,7 +346,7 @@
          let mut scores = Vec::with_capacity(candidates.len());
          for text in candidates {
              let tail = self.model.encode(text);
-@@ -856,7 +737,7 @@
+@@ -856,7 +741,7 @@
              // How far this candidate agrees with the furthest-agreeing run from last time. One
              // short of `tail.len()` at most: a resume has to leave a token to run, both because
              // the run needs one and because a candidate with nothing left to score has no term.
@@ -345,7 +355,7 @@
                  .resume
                  .iter()
                  .map(|(tokens, _)| {
-@@ -869,12 +750,46 @@
+@@ -869,12 +754,46 @@
                  })
                  .enumerate()
                  .max_by_key(|(_, agreed)| *agreed);
@@ -396,7 +406,7 @@
                  }
                  _ => self.model.run_tail(prefix, tail),
              };
-@@ -884,45 +799,6 @@
+@@ -884,45 +803,6 @@
          }
          self.resume = next;
          scores
@@ -442,7 +452,7 @@
      }
  }
  
-@@ -959,11 +835,96 @@
+@@ -959,11 +839,96 @@
      for row in 0..rows {
          let source = &x[row * inputs..(row + 1) * inputs];
          let target = &mut out[row * outputs..(row + 1) * outputs];
@@ -541,7 +551,7 @@
  }
  
  /// The quantized counterpart of `dot`, with the same eight independent accumulators and the same
-@@ -1036,76 +997,197 @@
+@@ -1036,76 +1001,197 @@
  
  #[cfg(test)]
  mod tests {

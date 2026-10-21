@@ -601,7 +601,7 @@ def check_user_dictionary(binary):
         assert not (bus.directory / 'state').exists(), 'disabled learning created state'
 
 
-def check_contextual_learning(binary):
+def check_contextual_learning(binary, model):
     with PrivateBus() as bus:
         dictionaries = bus.directory / 'assets/dictionaries'
         dictionaries.mkdir(parents=True)
@@ -609,7 +609,7 @@ def check_contextual_learning(binary):
         for name in ('base.dict.yaml', 'ext.dict.yaml'):
             (dictionaries / name).write_text('...\n')
         config = bus.directory / 'config.json'
-        settings = {'data_dir': str(dictionaries.parent), 'model': str(MODEL), 'contextual_learning': True}
+        settings = {'data_dir': str(dictionaries.parent), 'model': str(model), 'contextual_learning': True}
         config.write_text(json.dumps(settings))
         snapshot_file = bus.directory / 'state/yanliu/learning.json'
         choices = [('乘火车前往', '西安'), ('此时此刻', '现')]
@@ -688,7 +688,7 @@ def check_contextual_learning(binary):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('binary', type=Path, help='yanliu-ibus executable under test')
-    parser.add_argument('--model', help='service --model for the protocol check')
+    parser.add_argument('--model', help='service model for the protocol and contextual learning checks')
     parser.add_argument('--device', choices=['cpu', 'gpu', 'npu'], help='service --device for the protocol check')
     parser.add_argument('--runtime-dir', help='service --runtime-dir for the protocol check')
     parser.add_argument('--installed', type=Path, metavar='PREFIX',
@@ -713,7 +713,7 @@ def main():
     print('PASS: learning startup and writer failures keep their causes; --no-learning leaves state untouched')
     check_user_dictionary(binary)
     print('PASS: explicit user dictionary; malformed table rejected with its path')
-    check_contextual_learning(binary)
+    check_contextual_learning(binary, Path(args.model).resolve(strict=True) if args.model else MODEL)
     print('PASS: contextual corrections persist across restart; sensitive input and opt-out do not learn')
 
 

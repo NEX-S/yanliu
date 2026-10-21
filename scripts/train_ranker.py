@@ -2,7 +2,7 @@
 """Fine-tune the current character model on real CLI candidate shortlists.
 
 Install scripts/training-requirements.txt in a private virtual environment.
-Only public, explicitly supplied train/dev JSONL files are read. The fresh output
+Only explicitly supplied train/dev JSONL and optional text files are read. The fresh output
 directory retains every development case and all epoch artifacts; this command
 does not install a model or access system learning.
 """
@@ -18,6 +18,7 @@ import struct
 import subprocess
 import sys
 import time
+import unicodedata
 
 ROOT = Path(__file__).resolve().parents[1]
 DICTIONARIES = ROOT / "data/dictionaries"
@@ -61,6 +62,8 @@ def read_cases(path):
             raise ValueError(f"{path}:{number}: case id must be a unique string")
         if "group_id" in case and (not isinstance(case["group_id"], str) or not case["group_id"]):
             raise ValueError(f"{path}:{number}: group_id must be a nonempty string")
+        if "source_group" in case and (not isinstance(case["source_group"], str) or not case["source_group"]):
+            raise ValueError(f"{path}:{number}: source_group must be a nonempty string")
         ids.add(identity)
         cases.append(dict(case, id=identity, golds=golds, context=case.get("context", "")))
     if not cases:
@@ -69,11 +72,19 @@ def read_cases(path):
 
 
 def reject_overlap(train, dev):
-    inputs = {case["input"] for case in train} & {case["input"] for case in dev}
-    golds = {gold for case in train for gold in case["golds"]} & {
-        gold for case in dev for gold in case["golds"]}
-    if inputs or golds:
-        raise ValueError(f"train/dev overlap: {len(inputs)} input(s), {len(golds)} gold(s)")
+    def normalized(text):
+        return "".join(char for char in unicodedata.normalize("NFKC", text).casefold()
+                       if char.isalnum())
+
+    def identities(cases):
+        return {(normalized(case["input"]), normalized(case.get("context", "")), normalized(gold))
+                for case in cases for gold in case["golds"]}
+
+    groups = {case["source_group"] for case in train if "source_group" in case} & {
+        case["source_group"] for case in dev if "source_group" in case}
+    duplicates = identities(train) & identities(dev)
+    if groups or duplicates:
+        raise ValueError(f"train/dev overlap: {len(groups)} source_group(s), {len(duplicates)} duplicate(s)")
 
 
 def shortlist(case, candidates):
@@ -119,19 +130,28 @@ def aligned_rows(cases, report):
     return report["rows"]
 
 
-def training_groups(cases, report, window):
+def training_groups(cases, report, window, vocab):
     groups, statuses = [], Counter()
+    characters = set(vocab[3:])
     for case, row in zip(cases, aligned_rows(cases, report), strict=True):
         candidates = row["candidates"]
         indices = shortlist(case, candidates)
         texts = [candidates[index]["text"] for index in indices]
+        known = [all(char in characters for char in text) for text in texts]
         if len(indices) < 2 or len(set(texts)) < 2:
             status = "protected_or_no_competition"
         elif any(len(text) >= window or any(ch.isascii() and ch.isalpha() for ch in text)
                  for text in texts):
             status = "neutral_language_group"
+        elif not known[0]:
+            status = "neutral_language_group_oov_leader"
+        elif sum(known) < 2:
+            status = "neutral_language_group_insufficient_known_candidates"
         elif not any(text in case["golds"] for text in texts):
             status = "gold_outside_shortlist"
+        elif not any(is_known and text in case["golds"]
+                     for text, is_known in zip(texts, known, strict=True)):
+            status = "gold_only_unrepresented"
         elif all(text in case["golds"] for text in texts):
             status = "no_negative_candidate"
         else:
@@ -141,7 +161,7 @@ def training_groups(cases, report, window):
             penalties = [2.0 * max(leader - static_score(candidates[index]), 0.0)
                          if prior else 0.0 for index in indices]
             groups.append({"id": case["id"], "context": case["context"], "texts": texts,
-                           "static_indices": indices, "penalties": penalties,
+                           "static_indices": indices, "known_mask": known, "penalties": penalties,
                            "gold_indices": [i for i, text in enumerate(texts) if text in case["golds"]]})
         statuses[status] += 1
     return groups, dict(statuses)
@@ -151,13 +171,17 @@ def encode(groups, vocab, window, torch):
     index = {char: i for i, char in enumerate(vocab) if len(char) == 1}
     sequences, offsets, bounds = [], [], []
     for group in groups:
-        room = window - max(map(len, group["texts"])) - 1
+        # Runtime scores only representable texts. OOV rows are placeholders, so they
+        # must not shorten the context available to the actually scored candidates.
+        texts = [text if known else group["texts"][0]
+                 for text, known in zip(group["texts"], group["known_mask"], strict=True)]
+        room = window - max(map(len, texts)) - 1
         if room < 0:
             raise ValueError("candidate does not fit model context")
         suffix = group["context"][-room:] if room else ""
         prefix = [2] + [index.get(char, 1) for char in suffix]
         start = len(sequences)
-        for text in group["texts"]:
+        for text in texts:
             sequences.append(prefix + [index.get(char, 1) for char in text])
             offsets.append((len(prefix) - 1, len(text)))
         bounds.append((start, len(sequences)))
@@ -172,14 +196,17 @@ def encode(groups, vocab, window, torch):
 
 def language_scores(model, tokens, mask, torch):
     logits, _ = model(tokens[:, :-1])
-    logp = logits.log_softmax(-1).gather(-1, tokens[:, 1:, None]).squeeze(-1)
+    logp = logits.float().log_softmax(-1).gather(-1, tokens[:, 1:, None]).squeeze(-1)
     return (logp * mask).sum(-1) / mask.sum(-1)
 
 
 def ranking_loss(values, groups, bounds, torch):
     losses = []
     for group, (start, end) in zip(groups, bounds, strict=True):
-        scores = values[start:end] - values.new_tensor(group["penalties"])
+        language = values[start:end]
+        known = torch.tensor(group["known_mask"], dtype=torch.bool, device=values.device)
+        language = torch.where(known, language, language[0])
+        scores = language - values.new_tensor(group["penalties"])
         scores = scores + values.new_tensor([0.25] + [0.0] * (end - start - 1))
         # A single gold is ordinary CE; an accepted gold set uses its total probability.
         losses.append(scores.logsumexp(0) - scores[group["gold_indices"]].logsumexp(0))
@@ -266,72 +293,121 @@ def parser():
     result.add_argument("--seed", type=int, default=20261019)
     result.add_argument("--batch", type=int, default=4)
     result.add_argument("--threads", type=int, default=2)
+    result.add_argument("--device", choices=("cpu", "xpu"), default="cpu")
+    result.add_argument("--precision", choices=("fp32", "bf16"), default="fp32")
+    result.add_argument("--text-train", type=Path,
+                        help="add one ordinary text CE batch to every ranking update")
+    result.add_argument("--text-batch", type=int, default=16)
     return result
 
 
 def main():
     args = parser().parse_args()
-    if args.epochs < 0 or args.batch < 1 or args.threads < 1 or not math.isfinite(args.lr) or args.lr <= 0:
+    if args.epochs < 0 or min(args.batch, args.text_batch, args.threads) < 1 or not math.isfinite(args.lr) or args.lr <= 0:
         raise ValueError("epochs must be nonnegative; batch, threads and lr must be positive")
     train, dev = read_cases(args.train), read_cases(args.dev)
     reject_overlap(train, dev)
     for key in ["model", "binary", "train", "dev", "output_dir"]:
         setattr(args, key, getattr(args, key).resolve())
+    if args.text_train is not None:
+        args.text_train = args.text_train.resolve()
     args.output_dir.mkdir(parents=True, exist_ok=False)
     import torch
     from safetensors.torch import save_file
+    import pretrain_model as text_training
+    text_training.check_runtime(args.device, args.precision, torch)
     sys.path.insert(0, str(ROOT / "vendor/chinese-ime-training/neural"))
     from initialize import load_initial_model
     torch.set_num_threads(args.threads)
     torch.set_num_interop_threads(1)
     torch.manual_seed(args.seed)
-    torch.use_deterministic_algorithms(True)
+    torch.use_deterministic_algorithms(args.device == "cpu")
     model, cfg, vocab, metadata = load_initial_model(args.model)
+    model.to(args.device)
     model.eval()
+    text_corpus = text_counts = None
+    if args.text_train is not None:
+        import numpy as np
+        text_corpus, text_counts = text_training.encode_text(
+            args.text_train, vocab, cfg.context, args.output_dir / "text-train.tokens.u16")
+        text_rng = np.random.default_rng(args.seed)
+        text_order, text_cursor = text_rng.permutation(len(text_corpus)), 0
     source_paths = sorted((ROOT / "src").rglob("*.rs")) + [
         ROOT / "Cargo.toml", ROOT / "Cargo.lock", Path(__file__).resolve(),
+        ROOT / "scripts/pretrain_model.py",
         ROOT / "scripts/training-requirements.txt", ROOT / "vendor/chinese-ime-lm/src/lib.rs",
         ROOT / "vendor/chinese-ime-training/neural/model.py",
         ROOT / "vendor/chinese-ime-training/neural/initialize.py"]
     recipe = {"format": "yanliu-ranker-training-v1", "arguments": {
         key: str(value) if isinstance(value, Path) else value for key, value in vars(args).items()},
         "torch": torch.__version__, "config": vars(cfg), "model_metadata": metadata,
+        "runtime": {"device": args.device, "precision": args.precision,
+                    "attention_backend": "math" if args.precision == "bf16" else "framework_default",
+                    "name": torch.xpu.get_device_name(0) if args.device == "xpu" else "CPU",
+                    "parameter_dtype": "float32", "deterministic_algorithms": args.device == "cpu"},
         "initial_model_sha256": digest(args.model), "binary_sha256": digest(args.binary),
         "data": {"train": digest(args.train), "dev": digest(args.dev)},
         "source": {str(path.relative_to(ROOT)): digest(path) for path in source_paths},
         "dictionaries": {name: digest(DICTIONARIES / name)
                          for name in ["8105.dict.yaml", "base.dict.yaml", "ext.dict.yaml"]},
         "optimizer": {"name": "AdamW", "betas": [0.9, 0.95], "weight_decay": 0.01, "clip_norm": 1.0},
-        "loss": "CE(mean_character_logp - direct_word_static_gap * 2 + leader_margin_0.25); gold-set marginal CE",
+        "loss": ("rankCE + ordinary_text_CE; fixed coefficient 1 for each" if args.text_train else "rankCE"),
+        "ranking_loss": "CE(mean_character_logp - direct_word_static_gap * 2 + leader_margin_0.25); gold-set marginal CE",
+        "oov_policy": "match runtime: ASCII letters or candidates at least context-length neutralize the whole group; skip groups with OOV leader or fewer than two representable candidates; skip groups whose in-shortlist golds are all OOV because their leader-tied language score cannot clear the leader margin; retain the full shortlist and accepted gold identities otherwise; OOV language score equals the differentiable leader language score, leaving static penalties and promotion margin intact",
+        "loss_reporting": "mean_loss and mean_rank_loss are group-weighted; text_cross_entropy is effective-target-weighted",
+        "text_counts": text_counts,
         "selection": "actual CLI int8 development group-mean top1; ties choose earliest epoch",
-        "learning": "disabled; no system state or private data is read"}
+        "learning": "system learning disabled; only explicitly supplied training files are read"}
+    if args.text_train is not None:
+        recipe["data"]["text_train"] = digest(args.text_train)
     write_json(args.output_dir / "recipe.json", recipe)
     recipe_sha = digest(args.output_dir / "recipe.json")
     train_report, train_command = cli_evaluate(args.binary, args.train, args.output_dir / "train-static.json")
-    groups, statuses = training_groups(train, train_report, cfg.context)
+    groups, statuses = training_groups(train, train_report, cfg.context, vocab)
     write_json(args.output_dir / "training-data.json", {
         "n": len(train), "trainable": len(groups), "statuses": statuses,
         "static_cli": train_command, "groups": groups})
+    del train_report, train
     if not groups and args.epochs:
         raise ValueError("no trainable candidate groups; see training-data.json")
+    initial_artifacts = export_model(model, metadata, recipe["initial_model_sha256"], recipe_sha,
+                                     args.output_dir, 0, 0, torch, save_file)
     initial_report, initial_command = cli_evaluate(
-        args.binary, args.dev, args.output_dir / "dev-initial.json", args.model)
+        args.binary, args.dev, args.output_dir / "dev-initial.json", initial_artifacts["int8"]["path"])
+    if metadata.get("precision") == "int8":
+        source_report, _ = cli_evaluate(args.binary, args.dev, args.output_dir / "dev-source.json", args.model)
+        if source_report["rows"] != initial_report["rows"]:
+            raise ValueError("epoch0 int8 roundtrip changed original-model CLI rows")
     aligned_rows(dev, initial_report)
     initial = compare_reports(dev, initial_report, initial_report)
     write_json(args.output_dir / "development-initial.json", dict(initial, cli=initial_command))
-    optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, betas=(0.9, 0.95), weight_decay=0.01)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, betas=(0.9, 0.95),
+                                 weight_decay=0.01, foreach=False)
     steps, training, development = 0, [], []
     for epoch in range(args.epochs + 1):
         if epoch:
             started = time.monotonic()
+            model.train(args.text_train is not None)
             order = list(range(len(groups)))
             random.Random(args.seed + epoch).shuffle(order)
-            total = 0.0
+            total = rank_total = text_total = 0.0
+            text_tokens = 0
             for offset in range(0, len(order), args.batch):
                 batch = [groups[index] for index in order[offset:offset + args.batch]]
                 tokens, mask, bounds = encode(batch, vocab, cfg.context, torch)
+                tokens, mask = tokens.to(args.device), mask.to(args.device)
                 optimizer.zero_grad(set_to_none=True)
-                loss = ranking_loss(language_scores(model, tokens, mask, torch), batch, bounds, torch)
+                with text_training.autocast(args.device, args.precision, torch):
+                    rank_loss = ranking_loss(language_scores(model, tokens, mask, torch), batch, bounds, torch)
+                    loss = rank_loss
+                    if text_corpus is not None:
+                        if text_cursor == len(text_order):
+                            text_order, text_cursor = text_rng.permutation(len(text_corpus)), 0
+                        indices = text_order[text_cursor:text_cursor + args.text_batch]
+                        text_cursor += len(indices)
+                        inputs, targets, n = text_training.text_batch(text_corpus, indices, args.device, torch)
+                        _, text_loss = model(inputs, targets)
+                        loss = rank_loss + text_loss
                 if not torch.isfinite(loss):
                     raise ValueError(f"nonfinite loss at epoch {epoch}, batch {offset // args.batch}")
                 loss.backward()
@@ -339,14 +415,30 @@ def main():
                 optimizer.step()
                 steps += 1
                 total += float(loss.detach()) * len(batch)
+                rank_total += float(rank_loss.detach()) * len(batch)
+                if text_corpus is not None:
+                    text_total += float(text_loss.detach()) * n
+                    text_tokens += n
+                if steps % 100 == 0:
+                    print(json.dumps({"epoch": epoch, "optimizer_steps": steps,
+                                      "groups_seen": offset + len(batch), "groups_total": len(groups),
+                                      "mean_loss": total / (offset + len(batch)),
+                                      "mean_rank_loss": rank_total / (offset + len(batch)),
+                                      "text_cross_entropy": text_total / text_tokens if text_tokens else None,
+                                      "text_effective_targets": text_tokens,
+                                      "seconds": time.monotonic() - started}), flush=True)
             training.append({"epoch": epoch, "n": len(groups), "mean_loss": total / len(groups),
+                             "mean_rank_loss": rank_total / len(groups),
+                             "text_cross_entropy": text_total / text_tokens if text_tokens else None,
+                             "text_effective_targets": text_tokens,
                              "optimizer_steps": steps, "seconds": time.monotonic() - started})
-        artifacts = export_model(model, metadata, recipe["initial_model_sha256"], recipe_sha,
-                                 args.output_dir, epoch, steps, torch, save_file)
-        report, command = cli_evaluate(args.binary, args.dev,
-            args.output_dir / f"dev-epoch{epoch:02d}.json", artifacts["int8"]["path"])
-        if epoch == 0 and report["rows"] != initial_report["rows"]:
-            raise ValueError("epoch0 int8 roundtrip changed original-model CLI rows")
+        if epoch:
+            artifacts = export_model(model, metadata, recipe["initial_model_sha256"], recipe_sha,
+                                     args.output_dir, epoch, steps, torch, save_file)
+            report, command = cli_evaluate(args.binary, args.dev,
+                args.output_dir / f"dev-epoch{epoch:02d}.json", artifacts["int8"]["path"])
+        else:
+            artifacts, report, command = initial_artifacts, initial_report, initial_command
         comparison = compare_reports(dev, initial_report, report)
         record = dict(comparison, epoch=epoch, optimizer_steps=steps, artifacts=artifacts, cli=command)
         development.append(record)
