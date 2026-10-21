@@ -130,14 +130,14 @@ class ImeLabTests(unittest.TestCase):
             self.assertFalse((output / "check.json").exists())
 
     def test_typed_input_and_case_rules(self):
-        for gold, typed in (("绿色", "lvse"), ("银行", "yinhang"), ("行走", "xingzou")):
+        for gold, typed in (("绿色", "lvse"), ("银行", "yinhang"), ("行走", "xingzou"), ("对", "dui")):
             self.assertEqual(lab.pinyin(gold), typed)
+            self.assertIsNone(lab.rejection(case(gold=gold), set()))
         invalid = (
             (case(input="paixumoxing"), "schema_fields"),
             (case(context=None), "schema_types"),
             (case(bucket="private"), "unknown_bucket"),
             (case(gold="模型A"), "gold_chinese_or_length"),
-            (case(gold="模"), "gold_chinese_or_length"),
             (case(gold="中" * 9), "gold_chinese_or_length"),
             (case(context="软件Rust"), "context_chinese_or_length"),
             (case(context="中" * 33), "context_chinese_or_length"),
@@ -320,6 +320,177 @@ class ImeLabTests(unittest.TestCase):
                 lab.request_teacher(endpoint + "/down", {}, 5, output, "down")
             self.assertEqual(raised.exception.code, 503)
             self.assertIn("fixture unavailable", raised.exception.__notes__[0])
+
+    def test_continuous_batches_are_checked_and_issues_deduplicated_before_deadline(self):
+        with tempfile.TemporaryDirectory(prefix="yanliu-ime-lab-continuous-") as directory:
+            root = Path(directory)
+            (root / "data/dictionaries").mkdir(parents=True)
+            (root / "data/dictionaries/test.dict.yaml").write_text("public fixture")
+            fixture, output = root / "fixture", root / "evidence"
+            fixture.write_bytes(b"bound assets; not executed")
+            response = completion(json.dumps({"cases": [case(gold="对"), case(gold="如")]}))
+            response["usage"] = {"prompt_tokens": 40, "completion_tokens": 20, "total_tokens": 60}
+            evaluated = []
+
+            def cli(command, cwd, check, stdout, timeout):
+                self.assertGreater(timeout, 0)
+                self.assertLessEqual(timeout, 36)
+                self.assertEqual(command[1:3], ["--dictionary-dir", str(root / "data/dictionaries")])
+                rows = [json.loads(line) for line in Path(command[command.index("--data") + 1]).read_text().splitlines()]
+                evaluated.append(rows)
+                lab.write_json(Path(command[command.index("--output") + 1]), {
+                    "format": "yanliu-candidate-check-v1",
+                    "buckets": {"all": {"n": 2, "top1": 0, "top5": 1, "recall": 1,
+                                          "static_top1": 1, "static_top5": 1, "rescues": 0, "breakages": 1}},
+                    "rows": [{"id": rows[0]["id"], "rank": None, "static_rank": None, "candidates": []},
+                             {"id": rows[1]["id"], "rank": 2, "static_rank": 1,
+                              "candidates": [{"text": "乳", "consumed": 2, "source": "ExactDictionary", "score_bits": 1},
+                                             {"text": "如", "consumed": 2, "source": "ExactDictionary", "score_bits": 2},
+                                             {"text": "如此", "consumed": 2, "source": "Completion", "score_bits": 3}]}],
+                })
+
+            sleeps = []
+
+            def sleep(seconds):
+                # Two complete batches followed by duration expiry during the normal interval.
+                self.assertTrue((output / "issues.json").exists())
+                self.assertTrue((output / "round-001-check.json").exists())
+                sleeps.append(seconds)
+                if len(sleeps) == 2:
+                    raise lab.DurationElapsed()
+
+            argv = ["ime_lab.py", "--output-dir", str(output), "--binary", str(fixture), "--model", str(fixture),
+                    "--dictionary-dir", str(root / "data/dictionaries"), "--endpoint", "https://gateway.example/openai",
+                    "--duration-hours", "0.01", "--cases-per-round", "2"]
+            with (patch.object(lab, "ROOT", root), patch.object(lab.sys, "argv", argv),
+                  patch.object(lab.urllib.request, "urlopen", return_value=io.BytesIO(json.dumps(response).encode())) as gateway,
+                  patch.object(lab.subprocess, "run", cli), patch.object(lab.time, "sleep", sleep),
+                  patch.object(lab.signal, "signal"), patch.object(lab.signal, "setitimer"),
+                  redirect_stdout(io.StringIO())):
+                # Each request needs an independent response stream.
+                gateway.side_effect = lambda *args, **kwargs: io.BytesIO(json.dumps(response).encode())
+                self.assertEqual(lab.main(), 0)
+            summary = json.loads((output / "summary.json").read_text())
+            self.assertEqual(summary["completed_rounds"], 2)
+            self.assertEqual(summary["cases"], 4)
+            self.assertEqual(summary["usage"]["total_tokens"], 120)
+            self.assertEqual(summary["buckets"]["all"]["breakages"], 2)
+            self.assertEqual(summary["rounds"][0]["issues"], {"new": 3, "repeated": 0, "total": 3})
+            self.assertEqual(summary["rounds"][1]["issues"], {"new": 0, "repeated": 3, "total": 3})
+            issues = json.loads((output / "issues.json").read_text())["issues"]
+            self.assertTrue(all(issue["occurrences"] == 2 and issue["status"] == "suspected" for issue in issues))
+            self.assertEqual([c["text"] for c in issues[1]["top_complete_candidates"]], ["乳", "如"])
+            self.assertEqual(len((output / "cases.jsonl").read_text().splitlines()), 4)
+            self.assertEqual(len(evaluated), 2)
+
+    def test_continuous_http_failure_preserves_first_batch_and_reports_original_failure(self):
+        with tempfile.TemporaryDirectory(prefix="yanliu-ime-lab-continuous-error-") as directory:
+            root = Path(directory)
+            (root / "data/dictionaries").mkdir(parents=True)
+            (root / "data/dictionaries/test.dict.yaml").write_text("public fixture")
+            fixture, output = root / "fixture", root / "evidence"
+            fixture.write_bytes(b"bound assets; not executed")
+            response = completion(json.dumps({"cases": [case(gold="对")]}))
+            error = urllib.error.HTTPError("https://gateway.example/openai/chat/completions", 503,
+                                          "fixture unavailable", {}, io.BytesIO(b"fixture unavailable"))
+
+            def cli(command, **kwargs):
+                rows = [json.loads(line) for line in Path(command[command.index("--data") + 1]).read_text().splitlines()]
+                lab.write_json(Path(command[command.index("--output") + 1]), {
+                    "format": "yanliu-candidate-check-v1", "buckets": {"all": {"n": 1}},
+                    "rows": [{"id": rows[0]["id"], "rank": 1, "static_rank": 1, "candidates": []}],
+                })
+
+            argv = ["ime_lab.py", "--output-dir", str(output), "--binary", str(fixture), "--model", str(fixture),
+                    "--dictionary-dir", str(root / "data/dictionaries"), "--endpoint", "https://gateway.example/openai",
+                    "--duration-hours", "0.01", "--interval-seconds", "0"]
+            with (patch.object(lab, "ROOT", root), patch.object(lab.sys, "argv", argv),
+                  patch.object(lab.urllib.request, "urlopen", side_effect=[io.BytesIO(json.dumps(response).encode()), error]),
+                  patch.object(lab.subprocess, "run", cli), patch.object(lab.signal, "signal"),
+                  patch.object(lab.signal, "setitimer"), redirect_stdout(io.StringIO())):
+                with self.assertRaises(urllib.error.HTTPError) as raised:
+                    lab.main()
+            self.assertIs(raised.exception, error)
+            summary = json.loads((output / "summary.json").read_text())
+            self.assertEqual(summary["status"], "failed")
+            self.assertEqual(summary["completed_rounds"], 1)
+            self.assertEqual(summary["rounds"][-1]["status"], "failed")
+            self.assertIn("503", summary["error"])
+            self.assertEqual((output / "round-002-response.body").read_bytes(), b"fixture unavailable")
+            self.assertTrue((output / "round-001-check.json").exists())
+
+    def test_continuous_deadline_timeout_reaps_a_waiting_cli(self):
+        with tempfile.TemporaryDirectory(prefix="yanliu-ime-lab-deadline-") as directory:
+            root = Path(directory)
+            (root / "data/dictionaries").mkdir(parents=True)
+            (root / "data/dictionaries/test.dict.yaml").write_text("public fixture")
+            fixture, output, pid = root / "fixture", root / "evidence", root / "child.pid"
+            fixture.write_text("#!/usr/bin/env python3\nimport os, time\n"
+                               f"open({str(pid)!r}, 'w').write(str(os.getpid()))\n"
+                               "time.sleep(60)\n")
+            fixture.chmod(0o700)
+            response = completion(json.dumps({"cases": [case(gold="对")]}))
+            argv = ["ime_lab.py", "--output-dir", str(output), "--binary", str(fixture), "--model", str(fixture),
+                    "--dictionary-dir", str(root / "data/dictionaries"), "--endpoint", "https://gateway.example/openai",
+                    "--duration-hours", "0.0001", "--interval-seconds", "0"]
+            with (patch.object(lab, "ROOT", root), patch.object(lab.sys, "argv", argv),
+                  patch.object(lab.urllib.request, "urlopen", return_value=io.BytesIO(json.dumps(response).encode())),
+                  redirect_stdout(io.StringIO())):
+                self.assertEqual(lab.main(), 1)
+            summary = json.loads((output / "summary.json").read_text())
+            self.assertLess(summary["elapsed_seconds"], 2)
+            self.assertEqual(summary["completed_rounds"], 0)
+            self.assertEqual(summary["rounds"][0]["status"], "interrupted")
+            self.assertFalse((output / "round-001-check.json").exists())
+            self.assertTrue(pid.exists())
+            with self.assertRaises(ProcessLookupError):
+                os.kill(int(pid.read_text()), 0)
+
+    def test_continuous_http_read_deadline_and_persistence_outside_alarm(self):
+        release_body = threading.Event()
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self):
+                self.rfile.read(int(self.headers["Content-Length"]))
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.flush()
+                release_body.wait(2)
+
+            def log_message(self, *args):
+                pass
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        self.addCleanup(release_body.set)
+        write_json = lab.write_json
+
+        def persist(path, value):
+            self.assertEqual(lab.signal.getitimer(lab.signal.ITIMER_REAL), (0.0, 0.0))
+            write_json(path, value)
+            json.loads(path.read_text())
+
+        with tempfile.TemporaryDirectory(prefix="yanliu-ime-lab-http-deadline-") as directory:
+            root = Path(directory)
+            (root / "data/dictionaries").mkdir(parents=True)
+            (root / "data/dictionaries/test.dict.yaml").write_text("public fixture")
+            fixture, output = root / "fixture", root / "evidence"
+            fixture.write_bytes(b"not executed")
+            argv = ["ime_lab.py", "--output-dir", str(output), "--binary", str(fixture), "--model", str(fixture),
+                    "--dictionary-dir", str(root / "data/dictionaries"),
+                    "--endpoint", f"http://127.0.0.1:{server.server_port}", "--duration-hours", "0.0001"]
+            with (patch.object(lab, "ROOT", root), patch.object(lab.sys, "argv", argv),
+                  patch.object(lab, "write_json", persist), patch.dict(os.environ, {"no_proxy": "*"}),
+                  patch.object(lab.subprocess, "run") as cli, redirect_stdout(io.StringIO())):
+                self.assertEqual(lab.main(), 1)
+            cli.assert_not_called()
+            summary = json.loads((output / "summary.json").read_text())
+            self.assertLess(summary["elapsed_seconds"], 2)
+            self.assertEqual(summary["completed_rounds"], 0)
+            self.assertEqual(summary["rounds"][0]["status"], "interrupted")
+            self.assertTrue((output / "round-001-request.json").exists())
 
 
 if __name__ == "__main__":

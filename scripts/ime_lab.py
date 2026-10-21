@@ -3,8 +3,9 @@
 
 Each round asks the teacher for context/gold/bucket cases, derives the typed input from gold with
 the pinned pypinyin and rejects cases outside the fixed rules. A bad teacher batch is recorded and
-the next round continues; HTTP, gateway and CLI errors stop the run. One CLI run checks every
-accepted case. Validated cases and round records are saved after each round, before the next request.
+the next round continues; HTTP, gateway and CLI errors stop the run. Finite mode checks all cases
+at the end; --duration-hours checks and records issues after every batch until the deadline.
+Validated cases and round records are saved after each round, before the next request.
 Exit status: 0 all rounds valid, 2 some rounds failed, 1 no valid case.
 --generate-only saves validated cases without observing CLI candidate scores.
 --pairs supplies public homophone pairs and requires two nonempty contexts per target.
@@ -17,8 +18,11 @@ import json
 import os
 from pathlib import Path
 import re
+import signal
 import subprocess
 import sys
+import time
+from datetime import datetime, timezone
 import urllib.error
 import urllib.request
 
@@ -28,7 +32,7 @@ ROOT = Path(__file__).resolve().parents[1]
 TEACHER_MODEL = "deepseek-flash"
 PYPINYIN_VERSION = "0.55.0"
 BUCKETS = ("daily", "software", "science", "office")
-GOLD = re.compile(r"[\u4e00-\u9fff]{2,8}")
+GOLD = re.compile(r"[\u4e00-\u9fff]{1,8}")
 CONTEXT = re.compile(r"[\u4e00-\u9fff，。！？；：、（）“”‘’…—]{0,32}")
 INPUT = re.compile(r"[a-z]{1,48}")
 
@@ -39,21 +43,35 @@ def sha256(path):
 
 
 def write_json(path, value):
-    path.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    temporary.replace(path)
 
 
-def request_teacher(endpoint, payload, timeout, output, name):
+def request_teacher(endpoint, payload, timeout, output, name, deadline=None):
     """POST one chat completion; the raw response is saved before it is parsed."""
     body = json.dumps(payload, ensure_ascii=False).encode()
     (output / f"{name}-request.json").write_bytes(body)
     request = urllib.request.Request(endpoint + "/chat/completions", data=body,
                                      headers={"Content-Type": "application/json"})
+    if deadline is not None:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise DurationElapsed()
+        signal.setitimer(signal.ITIMER_REAL, remaining)
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
             raw = response.read()
     except urllib.error.HTTPError as error:
-        error.add_note(error.read().decode(errors="replace"))
+        raw = error.read()
+        if deadline is not None:
+            signal.setitimer(signal.ITIMER_REAL, 0)
+        (output / f"{name}-response.body").write_bytes(raw)
+        error.add_note(raw.decode(errors="replace"))
         raise
+    finally:
+        if deadline is not None:
+            signal.setitimer(signal.ITIMER_REAL, 0)
     (output / f"{name}-response.body").write_bytes(raw)
     return json.loads(raw), hashlib.sha256(raw).hexdigest()
 
@@ -82,7 +100,7 @@ def load_pairs(path):
     for index, pair in enumerate(pairs, 1):
         if (not isinstance(pair, list) or len(pair) != 2 or
                 not all(isinstance(gold, str) and GOLD.fullmatch(gold) for gold in pair)):
-            raise ValueError(f"pair {index}: expected two Chinese targets of 2 to 8 characters")
+            raise ValueError(f"pair {index}: expected two Chinese targets of 1 to 8 characters")
         if pair[0] == pair[1]:
             raise ValueError(f"pair {index}: duplicate_target")
         typed = pinyin(pair[0])
@@ -172,7 +190,8 @@ def prompt(round_number, count, seen, focus, pairs=None):
                  "前文必须能自然紧接目标词，明确排除同对另一个词，不可让两个词都适用。"
                  "指定词对：" + json.dumps(pairs, ensure_ascii=False))
     else:
-        text += "gold为连续2至6个简体汉字，不含标点、英文或数字。"
+        text += ("gold为连续1至6个简体汉字，不含标点、英文或数字。"
+                 f"其中至少{max(1, count // 4)}条是高频单字，其余覆盖常用同音词和计算机术语。")
         text += f"前{count // 2}条context必须为空字符串，其余context是适合紧接gold的自然中文前文，"
     text += ("context最多32个汉字或中文标点，不含空白、拉丁字母和数字，且不能已经包含gold。"
              "各案例的目标与前文应多样，不要重复案例。")
@@ -182,6 +201,185 @@ def prompt(round_number, count, seen, focus, pairs=None):
     if focus:
         text += "\n本次重点：" + focus
     return text
+
+
+def continuous_files(args):
+    return {
+        "generator": sha256(Path(__file__).resolve()),
+        "binary": sha256(args.binary), "model": sha256(args.model),
+        "dictionaries": {path.name: sha256(path) for path in sorted(args.dictionary_dir.glob("*.dict.yaml"))},
+        "source": {str(path.relative_to(ROOT)): sha256(path) for path in
+                   sorted([*ROOT.glob("src/**/*.rs"), ROOT / "Cargo.toml", ROOT / "Cargo.lock"])
+                   if path.is_file()},
+    }
+
+
+def record_issues(issues, cases, report, name, timestamp):
+    added = repeated = 0
+    by_id = {case["id"]: case for case in cases}
+    if set(by_id) != {row["id"] for row in report["rows"]}:
+        raise ValueError("CLI report case IDs do not match the batch")
+    for row in report["rows"]:
+        case = by_id[row["id"]]
+        kinds = []
+        if row["rank"] is None:
+            kinds.append("suspected_not_in_returned_candidates")
+        elif row["rank"] > 1:
+            kinds.append("suspected_ranking")
+        if row["static_rank"] == 1 and row["rank"] != 1:
+            kinds.append("suspected_model_breakage")
+        for kind in kinds:
+            key = (case["input"], case["context"], (case["gold"],), kind)
+            example = {"case_id": case["id"], "cases": f"{name}-cases.jsonl", "check": f"{name}-check.json"}
+            if key not in issues:
+                issues[key] = {
+                    "input": case["input"], "context": case["context"], "golds": [case["gold"]],
+                    "kind": kind, "status": "suspected", "first_seen_at": timestamp,
+                    "first_example": example, "occurrences": 0,
+                }
+                added += 1
+            else:
+                repeated += 1
+            issues[key].update({
+                "last_seen_at": timestamp, "latest_example": example,
+                "occurrences": issues[key]["occurrences"] + 1,
+                "rank": row["rank"], "static_rank": row["static_rank"],
+                "top_complete_candidates": [candidate for candidate in row["candidates"]
+                    if candidate["consumed"] == len(case["input"].encode())
+                    and candidate["source"] != "Completion"][:10],
+            })
+    return {"new": added, "repeated": repeated, "total": len(issues)}
+
+
+class DurationElapsed(Exception):
+    pass
+
+
+def run_continuous(args):
+    if version("pypinyin") != PYPINYIN_VERSION:
+        raise ValueError(f"pypinyin must be exactly {PYPINYIN_VERSION}")
+    args.binary, args.model = args.binary.resolve(), args.model.resolve()
+    args.dictionary_dir = args.dictionary_dir.resolve()
+    files = continuous_files(args)
+    if not files["dictionaries"]:
+        raise ValueError("no public dictionaries in --dictionary-dir")
+    output = args.output_dir.absolute()
+    output.mkdir(parents=True)
+    endpoint = args.endpoint.rstrip("/")
+    started, started_monotonic = time.time(), time.monotonic()
+    duration = args.duration_hours * 3600
+    deadline = started_monotonic + duration
+    timestamp = lambda: datetime.now(timezone.utc).isoformat()
+    summary = {
+        "status": "running", "mode": "continuous", "teacher_model": TEACHER_MODEL,
+        "endpoint": endpoint, "pypinyin": PYPINYIN_VERSION, "argv": sys.argv,
+        "files": files, "started_at": datetime.fromtimestamp(started, timezone.utc).isoformat(),
+        "deadline_at": datetime.fromtimestamp(started + duration, timezone.utc).isoformat(),
+        "duration_seconds": duration, "interval_seconds": args.interval_seconds,
+        "rounds": [], "completed_rounds": 0, "cases": 0, "buckets": {}, "usage": {},
+    }
+    write_json(output / "summary.json", summary)
+    issues, seen, current = {}, set(), None
+
+    def elapsed(_signum, _frame):
+        raise DurationElapsed()
+
+    previous = signal.signal(signal.SIGALRM, elapsed)
+    try:
+        number = 0
+        while time.monotonic() < deadline:
+            if continuous_files(args) != files:
+                raise ValueError("measured source, generator, binary, model or dictionaries changed during the run")
+            number += 1
+            name = f"round-{number:03d}"
+            current = {"round": number, "started_at": timestamp(), "status": "running"}
+            write_json(output / f"{name}.json", current)
+            payload = {
+                "model": TEACHER_MODEL,
+                "messages": [{"role": "user", "content": prompt(number, args.cases_per_round, seen, args.focus)}],
+                "stream": False, "max_tokens": min(3072, 256 + 192 * args.cases_per_round),
+                "temperature": 0.8, "response_format": {"type": "json_object"},
+                "thinking": {"type": "disabled"},
+            }
+            response, response_hash = request_teacher(endpoint, payload,
+                min(args.request_timeout, deadline - time.monotonic()), output, name, deadline=deadline)
+            current["response_sha256"] = response_hash
+            if "usage" in response:
+                current["usage"] = response["usage"]
+                for key, value in response["usage"].items():
+                    if isinstance(value, (int, float)) and not isinstance(value, bool):
+                        summary["usage"][key] = summary["usage"].get(key, 0) + value
+            try:
+                generated = teacher_cases(response)
+            except ValueError as error:
+                current["error"] = f"{type(error).__name__}: {error}"
+            else:
+                # Repeated batches are still checked so issue occurrence counts remain meaningful.
+                accepted, rejected = select_cases(generated, set(), number, response_hash)
+                seen.update((case["context"], case["gold"]) for case in accepted)
+                current.update(generated=len(generated), accepted=[case["id"] for case in accepted], rejected=rejected)
+                if not accepted:
+                    current["error"] = "no valid cases after rule rejection"
+                else:
+                    batch = output / f"{name}-cases.jsonl"
+                    batch.write_text("".join(json.dumps(case, ensure_ascii=False) + "\n" for case in accepted),
+                                     encoding="utf-8")
+                    check = output / f"{name}-check.json"
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise DurationElapsed()
+                    try:
+                        subprocess.run([str(args.binary), "--dictionary-dir", str(args.dictionary_dir),
+                            "--model", str(args.model), "evaluate", "--data", str(batch), "--output", str(check)],
+                            cwd=ROOT, check=True, stdout=subprocess.DEVNULL,
+                            timeout=min(args.cli_timeout, remaining))
+                    except subprocess.TimeoutExpired:
+                        if time.monotonic() >= deadline:
+                            raise DurationElapsed() from None
+                        raise
+                    report = json.loads(check.read_text(encoding="utf-8"))
+                    if report["format"] != "yanliu-candidate-check-v1":
+                        raise ValueError(f"unsupported CLI report format: {report['format']}")
+                    current["issues"] = record_issues(issues, accepted, report, name, timestamp())
+                    current["buckets"] = report["buckets"]
+                    for bucket, metrics in report["buckets"].items():
+                        total = summary["buckets"].setdefault(bucket, {})
+                        for metric, value in metrics.items():
+                            total[metric] = total.get(metric, 0) + value
+                    with (output / "cases.jsonl").open("a", encoding="utf-8") as stream:
+                        stream.write(batch.read_text(encoding="utf-8"))
+                    summary["cases"] += len(accepted)
+                    summary["completed_rounds"] += 1
+                    write_json(output / "issues.json", {"format": "yanliu-suspected-issues-v1", "issues": list(issues.values())})
+            current.update(status="rejected" if "error" in current else "complete", finished_at=timestamp())
+            write_json(output / f"{name}.json", current)
+            summary["rounds"].append(current)
+            summary["updated_at"] = timestamp()
+            write_json(output / "summary.json", summary)
+            print(json.dumps(current, ensure_ascii=False), flush=True)
+            current = None
+            time.sleep(min(args.interval_seconds, max(0, deadline - time.monotonic())))
+    except DurationElapsed:
+        if current is not None:
+            current.update(status="interrupted", finished_at=timestamp(), error="duration elapsed before batch completed")
+            write_json(output / f"round-{current['round']:03d}.json", current)
+            summary["rounds"].append(current)
+    except BaseException as error:
+        summary.update(status="failed", error=f"{type(error).__name__}: {error}")
+        if current is not None:
+            current.update(status="failed", finished_at=timestamp(), error=summary["error"])
+            write_json(output / f"round-{current['round']:03d}.json", current)
+            summary["rounds"].append(current)
+        raise
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, previous)
+        if summary["status"] == "running":
+            summary["status"] = ("failed" if not summary["completed_rounds"] else
+                                 "partial" if any(row["status"] == "rejected" for row in summary["rounds"]) else "complete")
+        summary.update(finished_at=timestamp(), elapsed_seconds=time.monotonic() - started_monotonic)
+        write_json(output / "summary.json", summary)
+    return summary["status"]
 
 
 def run(args):
@@ -265,7 +463,8 @@ def main():
     parser.add_argument("--model", type=Path, default=ROOT / "data/models/sentence-model.safetensors")
     parser.add_argument("--endpoint", default=os.environ.get("OPENAI_BASE_URL"),
                         help="OpenAI-compatible API base including any path prefix; defaults to OPENAI_BASE_URL")
-    parser.add_argument("--rounds", type=int, default=3)
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--rounds", type=int, default=3)
     parser.add_argument("--cases-per-round", type=int, default=4)
     parser.add_argument("--pairs", type=Path,
                         help="public JSON homophone pairs; generates two contexts per target, four cases per pair")
@@ -273,6 +472,14 @@ def main():
                         help="save validated cases without running CLI evaluation, for unobserved held-out data")
     parser.add_argument("--focus", default="", help="additional content requirements, such as technical terms or longer phrases")
     parser.add_argument("--request-timeout", type=float, default=180)
+    mode.add_argument("--duration-hours", type=float,
+                        help="continuously generate and check batches until this wall-clock duration expires")
+    parser.add_argument("--interval-seconds", type=float, default=60,
+                        help="continuous mode: wait this long after each batch (default: 60)")
+    parser.add_argument("--cli-timeout", type=float, default=180,
+                        help="continuous mode: maximum seconds per CLI batch")
+    parser.add_argument("--dictionary-dir", type=Path, default=ROOT / "data/dictionaries",
+                        help="continuous mode: explicit public dictionary directory, bound by hashes")
     args = parser.parse_args()
     if not args.endpoint:
         parser.error("--endpoint or OPENAI_BASE_URL is required")
@@ -280,6 +487,13 @@ def main():
         parser.error("--rounds must be positive and --cases-per-round between 1 and 32")
     if args.pairs is not None and args.cases_per_round % 4:
         parser.error("--pairs requires --cases-per-round divisible by 4")
+    if args.duration_hours is not None:
+        if (not 0 < args.duration_hours <= 168 or args.interval_seconds < 0
+                or args.request_timeout <= 0 or args.cli_timeout <= 0):
+            parser.error("duration must be in (0, 168] hours; interval nonnegative; timeouts positive")
+        if args.pairs is not None or args.generate_only:
+            parser.error("--duration-hours cannot be combined with --rounds, --pairs or --generate-only")
+        return {"complete": 0, "partial": 2, "failed": 1}[run_continuous(args)]
     return {"complete": 0, "partial": 2, "failed": 1}[run(args)]
 
 

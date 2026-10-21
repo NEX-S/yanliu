@@ -67,6 +67,21 @@ OPENAI_BASE_URL="${ANTHROPIC_BASE_URL%/anthropic}/openai" \
 
 本机 llmux 的 API base 为 `<origin>/openai`（请求 `/openai/chat/completions`），也可用 `--endpoint` 指定。输出目录须不存在，其中保存每轮原始请求与响应。每轮校验完成即追加 `cases.jsonl` 并保存 `round-XXX.json` 中的接受项、拒绝原因与响应哈希；后续 HTTP 请求失败也会保留已完成的轮次。全部生成完成后才运行一次 CLI，保存 `check.json` 与含各轮记录和源码、binary、词库、模型哈希的 `summary.json`；中途失败不生成最终汇总。教师内容无效的轮次记录后继续：全部有效退出 0，部分轮次无效退出 2，没有有效案例退出 1；HTTP 与 CLI 错误直接失败。案例是自动注音的合成开发数据，可能有多音字错误；用于调参后不能再当作独立评估。
 
+持续评估按时长运行，每批生成后立即用真实 Session 评估，覆盖高频单字、常用同音词和计算机术语。例如连续运行 9 小时，每批 16 例，批次间隔 60 秒：
+
+```sh
+OPENAI_BASE_URL="${ANTHROPIC_BASE_URL%/anthropic}/openai" \
+  .cache/yanliu-lab/bin/python scripts/ime_lab.py \
+  --output-dir results/deepseek-continuous-001 --duration-hours 9 \
+  --cases-per-round 16 --interval-seconds 60
+```
+
+`--duration-hours` 与 `--rounds`、`--pairs`、`--generate-only` 互斥。请求和 CLI 串行执行，分别受 `--request-timeout`、`--cli-timeout` 及剩余总时长约束；到截止时中断尚未完成的批次，不将其计入 `completed_rounds`。HTTP、CLI 或资产变化错误会明确终止，保留已完成批次及失败原因，不自动重试。持续运行前可冻结 binary、模型、词库与源码；`--binary`、`--model`、`--dictionary-dir` 指向所测快照，每批检查哈希未变。
+
+持续模式保存每批 `round-XXX-cases.jsonl`、`round-XXX-check.json` 和轮次记录，完成评估的案例追加到 `cases.jsonl`。`summary.json` 随批次更新，含起止时间、截止时间、完成批次、案例数、API 返回的 usage 和完整分母下的 top1/top5/recall、静态命中、rescue/breakage 计数。`issues.json` 按 `(input, context, golds, kind)` 去重，记录首次与最近出现、次数、样例路径及前十个完整消费的非 Completion 候选，完整候选身份保留在每批 check 中。
+
+自动记录只标记疑似问题：目标未在返回候选中、排名靠后、模型破坏静态首选。未命中不能直接证明词库缺词，教师答案也未必唯一正确；多音字注音和前文歧义需核实后再加入回归集。候选检查不模拟明确选词和重启学习，单字母快捷键及个人偏好使用上面的 `learning replay`。
+
 训练语境消歧时可加 `--pairs data/training/homophone-pairs-v1.json`，每个公开词对生成两词各两条非空前文。程序先验证两词全拼相同，再拒绝额外目标、缺配对、不平衡和重复案例；`--cases-per-round 32 --rounds 15` 覆盖该文件的 120 对词。`--generate-only` 保存原始响应和通过校验的案例，跳过候选评分，供先冻结分组与未观测留出。来源与限制见 [训练数据](../data/training/README.md)。
 
 ## 训练排序模型
