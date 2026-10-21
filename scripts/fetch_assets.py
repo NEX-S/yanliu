@@ -56,7 +56,8 @@ def fetch(asset, verify_only):
     try:
         with tempfile.NamedTemporaryFile(dir=path.parent, prefix=path.name + ".", delete=False) as output:
             temporary = Path(output.name)
-            request = urllib.request.Request(asset["url"], headers={"User-Agent": "yanliu-assets/0.1"})
+            request = urllib.request.Request(asset["url"], headers={
+                "User-Agent": "yanliu-assets/0.1", "Accept": "application/octet-stream"})
             with urllib.request.urlopen(request, timeout=60) as response:
                 shutil.copyfileobj(response, output)
         if temporary.stat().st_size != asset["size"] or digest(temporary) != asset["sha256"]:

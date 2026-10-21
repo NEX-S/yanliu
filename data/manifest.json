@@ -88,12 +88,12 @@
     },
     {
       "path": "data/models/sentence-model.safetensors",
-      "url": "https://github.com/metasequoiaime/chinese-ime-lm/releases/download/model-v1/sentence-model.safetensors",
-      "source": "metasequoiaime/chinese-ime-lm GitHub release asset 572758937",
-      "revision": "model-v1:asset-572758937",
-      "license": "Apache-2.0",
-      "sha256": "86ac529510cb3b4968a5e6ade83ec8080f5b34a0a681e75c362accbbd387d1c1",
-      "size": 4486280
+      "url": "https://api.github.com/repos/NEX-S/yanliu/releases/assets/663436754",
+      "source": "NEX-S/yanliu random-trained yanliu-4m-v2; GitHub release asset 663436754",
+      "revision": "models-v2:asset-663436754",
+      "license": "Mixed public sources; see data/models/LICENSE and data/models/NOTICE",
+      "sha256": "625dfc10eeb0fd4a723765589e5ebe1a302f25a61ea923cb4b95265efac70293",
+      "size": 4734576
     },
     {
       "path": "vendor/chinese-ime-training/LICENSE",
@@ -121,6 +121,42 @@
       "license": "GPL-3.0",
       "sha256": "0b7fb41aa8a4356fa7757aa1b9e84d5022fa33a5436e695dcc1116b0d34c1f9b",
       "size": 4393
+    },
+    {
+      "path": "data/models/LICENSE",
+      "url": "https://raw.githubusercontent.com/NEX-S/yanliu/f4a91295790f4879a0d2eeff650574406e98039a/data/model-cards/yanliu-4m-v2/LICENSE",
+      "source": "NEX-S/yanliu yanliu-4m-v2 model documentation",
+      "revision": "f4a91295790f4879a0d2eeff650574406e98039a",
+      "license": "Mixed public sources; see data/models/LICENSE and data/models/NOTICE",
+      "sha256": "e92e97932a8009a44fce0457976b41435bd4dfc6460111afd47637f9e1f20578",
+      "size": 1412
+    },
+    {
+      "path": "data/models/NOTICE",
+      "url": "https://raw.githubusercontent.com/NEX-S/yanliu/f4a91295790f4879a0d2eeff650574406e98039a/data/model-cards/yanliu-4m-v2/NOTICE",
+      "source": "NEX-S/yanliu yanliu-4m-v2 model documentation",
+      "revision": "f4a91295790f4879a0d2eeff650574406e98039a",
+      "license": "Mixed public sources; see data/models/LICENSE and data/models/NOTICE",
+      "sha256": "ace06ae17fa051480caf13fce148ac12ee70f6410fd9517be785cd87cef08e2b",
+      "size": 3317
+    },
+    {
+      "path": "data/models/README.md",
+      "url": "https://raw.githubusercontent.com/NEX-S/yanliu/f4a91295790f4879a0d2eeff650574406e98039a/data/model-cards/yanliu-4m-v2/README.md",
+      "source": "NEX-S/yanliu yanliu-4m-v2 model documentation",
+      "revision": "f4a91295790f4879a0d2eeff650574406e98039a",
+      "license": "Mixed public sources; see data/models/LICENSE and data/models/NOTICE",
+      "sha256": "7e1528800a9592d85b11f0052aa45754df582e8bbce6ebab4f38abda90d2a808",
+      "size": 4522
+    },
+    {
+      "path": "data/models/provenance.json",
+      "url": "https://raw.githubusercontent.com/NEX-S/yanliu/f4a91295790f4879a0d2eeff650574406e98039a/data/model-cards/yanliu-4m-v2/provenance.json",
+      "source": "NEX-S/yanliu yanliu-4m-v2 model documentation",
+      "revision": "f4a91295790f4879a0d2eeff650574406e98039a",
+      "license": "Mixed public sources; see data/models/LICENSE and data/models/NOTICE",
+      "sha256": "434c8d7d71b5c8a693b910f0924b754b527a387f0155a8a3994491e05d790ad2",
+      "size": 101210
     }
   ]
 }

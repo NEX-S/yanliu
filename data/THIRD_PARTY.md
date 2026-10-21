@@ -33,7 +33,25 @@ integration fixtures are omitted. Local changes to `src/lib.rs` are kept in
 `yanliu.patch`. The GPL-3.0 license of the main upstream repository is distinct
 from the Apache-2.0 license granted to `reference/`.
 
-## Default language model
+## v2 language models
+
+The default `yanliu-4m-v2` and optional `yanliu-25m-v2` were trained from random
+weights on public Chinese text: LCCC-base, Chinese Wikipedia 20231101,
+COIG-CQIA human answers, CLUE TNEWS, NaturalConv and CPED. They do not derive
+from the old public model weights. Fixed source revisions, download URLs,
+raw-file hashes, cleaning/split rules and training records are in their model
+cards and `provenance.json`:
+
+- [yanliu-4m-v2](model-cards/yanliu-4m-v2/README.md)
+- [yanliu-25m-v2](model-cards/yanliu-25m-v2/README.md)
+
+Each package retains the sources' known license and attribution statements,
+including missing or non-unified declarations. No single Apache-2.0 or other
+unified model license is claimed for these mixed-source weights. Package
+`LICENSE`, `NOTICE`, README and provenance travel with the installed model;
+the inference library's Apache-2.0 license remains separate.
+
+## Previous default language model
 
 The weight is `sentence-model.safetensors`, asset 572758937 of the
 metasequoiaime/chinese-ime-lm GitHub release `model-v1`. Release assets can be

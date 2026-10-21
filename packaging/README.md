@@ -8,7 +8,7 @@
 
 默认安装以 `-C target-cpu=native` 构建 CPU release 服务；产物应在目标机器重新编译。默认前缀为 `~/.local`，也可设置绝对、shell 安全的 `YANLIU_PREFIX`。实际二进制、词库和模型位于 `share/yanliu`，`bin/yanliu-ibus` 是指向实际二进制的符号链接，组件 XML 位于 `share/ibus/component/yanliu.xml`。默认安装不包含训练、评测文件、相邻 IR 或原生 runtime；显式 GPU/NPU 安装见下文。
 
-CPU 默认安装仓库的 `data/models/sentence-model.safetensors`；设置 `YANLIU_MODEL_DIR=/absolute/model/directory` 可安装选定目录中的同名源权重。GPU/NPU 必须指定该目录，同时提供配套 IR。模型目录内的 `LICENSE`、`NOTICE`、`README.md` 与 `provenance.json` 如存在，也随模型复制并纳入安装哈希；可选 [25M 训练模型](../data/model-cards/yanliu-25m-v1/README.md) 发布包包含这些文件。
+CPU 默认安装仓库的 `data/models/sentence-model.safetensors`，即[从随机权重训练的 4M v2](../data/model-cards/yanliu-4m-v2/README.md)；设置 `YANLIU_MODEL_DIR=/absolute/model/directory` 可安装选定目录中的同名源权重，例如[可选 25M v2](../data/model-cards/yanliu-25m-v2/README.md)。模型目录内的 `LICENSE`、`NOTICE`、`README.md` 与 `provenance.json` 随发布包提供，也随模型复制并纳入安装哈希。v2 发布包供 CPU 使用，不包含 IR 或原生加速运行库。
 
 `installation.json` 记录实际选中的源权重路径、SHA-256 和全部安装文件的 SHA。`source-manifest.json` 只记录仓库固定资产的来源，不证明另选权重的来源；加速模型的导出清单保留源权重内的许可、署名和 source/IR 哈希，使用其他权重时须保留其真实来源与适用许可。`THIRD_PARTY.md` 保留仓库资产的许可说明。CPU 与 GPU/NPU 安装均在 `share/yanliu/licenses/chinese-ime-lm/LICENSE` 保留完整 Apache-2.0 许可，在 `share/yanliu/licenses/chinese-ime-training/NOTICE` 保留完整上游署名声明。
 

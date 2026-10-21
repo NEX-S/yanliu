@@ -88,16 +88,23 @@ target/release/yanliu --model data/models/sentence-model.safetensors \
 
 ## 模型
 
-默认使用公共的 4M 字符模型，由 `fetch_assets.py` 下载并校验 SHA-256。已下载的资产可用 `python3 scripts/fetch_assets.py --verify-only` 检查。
+两个 v2 模型都从随机权重训练，使用约 5,227 万字符的公共中文文本，再以实际 CLI 候选做排序微调。日常运行只用本机 CPU，不调用远端大模型。
 
-[v0.1.0 发布页](https://github.com/NEX-S/yanliu/releases/tag/v0.1.0)另提供 25M 模型，压缩包包含源权重、同源 OpenVINO IR 和来源说明。解包后可在首次安装时指定：
+- **4M：默认。** 实际 448 万参数，INT8 文件约 4.73 MB，适合日常输入。与原来本机的 7M 相比，开发集首选命中接近，CPU 开销更低；旧回放集有小幅回退，具体数字见 [4M 模型卡](data/model-cards/yanliu-4m-v2/README.md)。
+- **25M：可选。** 实际 2,354 万参数，INT8 文件约 24.03 MB，本轮留出集的首选命中更高，计算量也更高，见 [25M 模型卡](data/model-cards/yanliu-25m-v2/README.md)。
+
+在权重和默认选择冻结后的 1,750 条留出样本上，首选命中率为 4M **73.49%**、25M **75.77%**，原本机 7M 为 **71.54%**。所有样本均计入分母，包括未召回的目标；自动注音和来源文本仍可能有误，这些数字不等同于日常输入准确率。
+
+本机三轮 CPU 回放中，发生模型评分的帧，输入处理与候选提升合计 p95 为 4M **4.15 ms**、25M **35.70 ms**。这是同一套 Session 和候选池的进程内测量，不包含 IBus 通信与 GNOME 绘制。开发集用于选模，不能当作日常输入准确率。
+
+默认资产由 `fetch_assets.py` 下载并校验 SHA-256；`python3 scripts/fetch_assets.py --verify-only` 可检查本地文件。[模型发布页](https://github.com/NEX-S/yanliu/releases/tag/models-v2)提供两个模型的压缩包，包含权重、来源和评测说明。解包后可在首次安装时指定：
 
 ```sh
-YANLIU_MODEL_DIR=/absolute/path/to/yanliu-25m-v1 \
+YANLIU_MODEL_DIR=/absolute/path/to/yanliu-25m-v2 \
   ./packaging/install-local.sh
 ```
 
-来源和评测限制见 [25M 模型卡](data/model-cards/yanliu-25m-v1/README.md)，复现方法见[训练配方](data/training/yanliu-25m-v1/README.md)。合成案例的命中率不代表日常输入准确率。
+数据来源、训练方法与复现范围见[训练记录](data/training/retrain-v2/README.md)。[v0.1.0 的 25M](data/model-cards/yanliu-25m-v1/README.md)保留为历史版本。
 
 ## 原理
 
