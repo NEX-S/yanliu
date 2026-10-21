@@ -14,13 +14,18 @@ from importlib.metadata import version
 import json
 from pathlib import Path
 import re
+import unicodedata
 
 from pypinyin import Style, lazy_pinyin
 
 ROOT = Path(__file__).resolve().parents[1]
 SPLITS = ("train", "dev", "holdout")
-TRAIN_LIMITS = {"lccc": 25_000, "wiki": 25_000, "cqia": 8_000, "tnews": 2_000}
-EVAL_LIMITS = {"lccc": 750, "wiki": 750, "cqia": 240, "tnews": 60}
+TRAIN_LIMITS = {"lccc": 24_000, "wiki": 36_000, "cqia": 10_000, "tnews": 2_000,
+                "naturalconv": 4_000, "cped": 4_000}
+DEV_LIMITS = {"lccc": 450, "wiki": 450, "cqia": 180, "tnews": 40,
+              "naturalconv": 440, "cped": 440}
+HOLDOUT_LIMITS = {"lccc": 0, "wiki": 0, "cqia": 0, "tnews": 0,
+                  "naturalconv": 1_000, "cped": 750}
 HAN = re.compile(r"[\u3400-\u9fff\U00020000-\U000323af]+")
 SYLLABLE = re.compile(r"[a-z]+")
 LENGTHS = ((1, 1), (2, 2), (3, 4), (5, 8))
@@ -43,26 +48,32 @@ def hashed(*parts):
 
 
 def query_key(case, gold=None):
-    return hashed(case["input"], case.get("context", ""), case["gold"] if gold is None else gold)
+    fields = (case["input"], case.get("context", ""), case["gold"] if gold is None else gold)
+    return hashed(*("".join(char for char in unicodedata.normalize("NFKC", field).casefold() if char.isalnum())
+                    for field in fields))
 
 
 def read_documents(path):
     """Validate the concrete grouped paragraph stream written by the corpus builder."""
-    seen, paragraphs = set(), []
+    seen, paragraphs, split_groups = set(), [], {}
     current = None
     paragraph_ids = set()
     with Path(path).open(encoding="utf-8") as stream:
         for number, line in enumerate(stream, 1):
             row = json.loads(line)
             if (not isinstance(row, dict)
-                    or set(row) != {"source", "group", "paragraph", "split", "text"}
+                    or set(row) != {"source", "group", "split_group", "paragraph", "split", "text"}
                     or not isinstance(row["source"], str) or row["source"] not in TRAIN_LIMITS
                     or not isinstance(row["group"], str) or not row["group"]
+                    or not isinstance(row["split_group"], str) or not row["split_group"]
                     or not isinstance(row["split"], str) or row["split"] not in SPLITS
                     or type(row["paragraph"]) is not int or row["paragraph"] < 0
                     or not isinstance(row["text"], str) or not row["text"]):
                 raise ValueError(f"{path}:{number}: invalid public document paragraph")
             key = (row["source"], row["group"])
+            split_key = hashed(row["source"], row["split_group"])
+            if split_groups.setdefault(split_key, row["split"]) != row["split"]:
+                raise ValueError(f"{path}:{number}: source split_group crosses split")
             if key != current:
                 group_hash = hashed(*key)
                 if group_hash in seen:
@@ -71,8 +82,8 @@ def read_documents(path):
                     yield paragraphs
                 seen.add(group_hash)
                 current, paragraphs, paragraph_ids = key, [], set()
-            if paragraphs and row["split"] != paragraphs[0]["split"]:
-                raise ValueError(f"{path}:{number}: document group crosses split")
+            if paragraphs and (row["split"], row["split_group"]) != (paragraphs[0]["split"], paragraphs[0]["split_group"]):
+                raise ValueError(f"{path}:{number}: document group crosses split or split_group")
             if row["paragraph"] in paragraph_ids:
                 raise ValueError(f"{path}:{number}: duplicate document paragraph index")
             paragraph_ids.add(row["paragraph"])
@@ -83,8 +94,9 @@ def read_documents(path):
 
 def document_proposals(paragraphs, counts):
     first = paragraphs[0]
-    source_group = first["source"] + ":" + first["group"]
-    slots = range(4) if first["split"] == "train" else [hashed(source_group, "length-slot")[0] % 4]
+    document_group = first["source"] + ":" + first["group"]
+    source_group = first["source"] + ":" + first["split_group"]
+    slots = range(4) if first["split"] == "train" else [hashed(document_group, "length-slot")[0] % 4]
     best = {}
     fitting = 0
     counts["documents"] += 1
@@ -95,12 +107,12 @@ def document_proposals(paragraphs, counts):
             counts["han_runs"] += 1
             for slot in slots:
                 counts["proposed_slots"] += 1
-                identity = (source_group, paragraph["paragraph"], run.start(), slot)
+                identity = (document_group, paragraph["paragraph"], run.start(), slot)
                 selection = hashed(*identity, "cut")
                 low, high = LENGTHS[slot]
                 length = low + selection[0] % (high - low + 1)
-                contextual = hashed(source_group, slot, "context")[0] % 4 != 0
-                minimum = int(contextual)
+                contextual = hashed(document_group, slot, "context")[0] % 4 != 0
+                minimum = int(contextual and run.start() == 0)
                 if len(text) < length + minimum:
                     counts["run_too_short_for_selected_length_and_context"] += 1
                     continue
@@ -108,19 +120,20 @@ def document_proposals(paragraphs, counts):
                 priority = hashed(*identity, "document-slot")
                 fitting += 1
                 if slot not in best or priority < best[slot][0]:
-                    best[slot] = (priority, identity, text, start, length, contextual)
+                    best[slot] = (priority, identity, text, start, length, contextual, paragraph["text"], run.start())
     counts["fitting_proposals"] += fitting
     counts["document_slot_not_selected"] += fitting - len(best)
     counts["selected_document_slots"] += len(best)
     proposals = []
     for slot in sorted(best):
-        _, identity, text, start, length, contextual = best[slot]
+        _, identity, text, start, length, contextual, paragraph_text, run_start = best[slot]
         low, high = LENGTHS[slot]
+        absolute_start = run_start + start
         case = {"id": "public-" + hashed(*identity).hex()[:24],
-                "context": text[max(0, start - 32):start] if contextual else "",
+                "context": paragraph_text[max(0, absolute_start - 32):absolute_start] if contextual else "",
                 "gold": text[start:start + length],
                 "bucket": f"public-{first['source']}-len{low}-{high}-{'context' if contextual else 'no-context'}",
-                "source_group": source_group, "group_id": source_group}
+                "source_group": source_group, "group_id": source_group, "document_group": document_group}
         proposals.append({"case": case, "run": text, "target_start": start})
     counts["sampled_document_cases"] += len(proposals)
     return proposals
@@ -168,7 +181,7 @@ def write_json(path, value):
 
 
 def build(documents, output, evidence, exclusion_paths,
-          train_limits=TRAIN_LIMITS, eval_limits=EVAL_LIMITS):
+          train_limits=TRAIN_LIMITS, dev_limits=DEV_LIMITS, holdout_limits=HOLDOUT_LIMITS):
     documents, output, evidence = map(Path, (documents, output, evidence))
     for path in ([output / f"ranking-{split}.jsonl" for split in SPLITS]
                  + [evidence / f"ranking-data-{name}.json" for name in ("recipe", "summary")]):
@@ -177,15 +190,19 @@ def build(documents, output, evidence, exclusion_paths,
     document_sha = digest(documents)
     excluded, exclusion_files = evaluation_queries(exclusion_paths)
     selected = defaultdict(list)
+    limits = {"train": train_limits, "dev": dev_limits, "holdout": holdout_limits}
+    for split, source_limits in limits.items():
+        if set(source_limits) != set(TRAIN_LIMITS) or any(type(limit) is not int or limit < 0 for limit in source_limits.values()):
+            raise ValueError(f"{split}: per-source case limits must be nonnegative integers for all known sources")
     counts = {(split, source): Counter({name: 0 for name in COUNT_FIELDS})
               for split in SPLITS for source in TRAIN_LIMITS}
     for paragraphs in read_documents(documents):
         first = paragraphs[0]
         key = (first["split"], first["source"])
         stats = counts[key]
-        limit = (train_limits if key[0] == "train" else eval_limits)[key[1]]
-        if type(limit) is not int or limit < 1:
-            raise ValueError("per-source case limits must be positive integers")
+        limit = limits[key[0]][key[1]]
+        if limit == 0:
+            continue
         for proposal in document_proposals(paragraphs, stats):
             case = proposal["case"]
             priority = int.from_bytes(hashed(case["id"], "source-budget"), "big")
@@ -208,7 +225,7 @@ def build(documents, output, evidence, exclusion_paths,
             proposals = sorted(selected[(split, source)], key=lambda entry: (-entry[0], entry[1]))
             stats["annotation_pool_cases"] = len(proposals)
             stats["hash_pool_not_selected"] = stats["sampled_document_cases"] - len(proposals)
-            limit = (train_limits if split == "train" else eval_limits)[source]
+            limit = limits[split][source]
             for _, _, proposal in proposals:
                 stats["pypinyin_calls"] += 1
                 case = annotate(proposal)
@@ -236,6 +253,8 @@ def build(documents, output, evidence, exclusion_paths,
                             "source": dict(Counter(case["source_group"].split(":", 1)[0] for case in cases)),
                             "target_length": dict(sorted(Counter(len(case["gold"]) for case in cases).items())),
                             "context": dict(Counter("present" if case["context"] else "empty" for case in cases)),
+                            "source_groups": {source: len({case["source_group"] for case in cases if case["source_group"].startswith(source + ":")}) for source in TRAIN_LIMITS},
+                            "documents": len({case["document_group"] for case in cases}),
                             "source_stats": {source: dict(counts[(split, source)]) for source in TRAIN_LIMITS}}
     recipe = {"format": "yanliu-public-ranking-data-v1", "documents": {"path": str(documents.resolve()), "sha256": document_sha},
               "script_sha256": digest(Path(__file__)), "pypinyin_version": version("pypinyin"),
@@ -244,13 +263,15 @@ def build(documents, output, evidence, exclusion_paths,
                         "document_caps": {"train": 4, "dev": 1, "holdout": 1},
                         "lengths": "one train slot each for 1,2,3-4,5-8 characters; dev/holdout slot chosen by SHA256",
                         "sampling": "SHA256(document, paragraph, Han-run offset, slot) fixes cut and length; minimum document-slot hash chooses paragraph/run; independent source-budget hash selects a fixed pool of ceil(1.25 * target) before any pypinyin call; annotate/filter/deduplicate only this pool, retain at most target in original hash order; no adaptive resampling to fill shortfalls",
-                        "context": "document-slot hash requests empty context 25% of the time; otherwise preserve 1..32 preceding Han characters from the same run",
+                        "context": "document-slot hash requests empty context 25% of the time; otherwise preserve 1..32 preceding paragraph characters including punctuation and earlier turns from that conversation; a target may begin at a Han-run boundary when the paragraph already has context; never cross paragraph/conversation boundaries",
                         "pinyin": "pypinyin NORMAL strict on each complete contiguous Han run before target slicing; one lowercase ASCII syllable per target character; automatic polyphonic readings are not human gold",
-                        "dedup": "SHA256 of exact (input,context,gold), against recorded existing evaluation and globally across the fixed annotation pools; different contexts of a common word remain eligible",
+                        "dedup": "SHA256 of NFKC/casefold/alphanumeric-normalized (input,context,gold), matching the train_ranker input boundary, against recorded existing evaluation and globally across the fixed annotation pools; different substantive contexts of a common word remain eligible",
                         "selection": "public text only; no CLI calls, model scores, candidate filtering or gold injection into recall",
-                        "train_limits": train_limits, "dev_and_holdout_limits": eval_limits,
+                        "source_groups": "source_group/group_id inherit source:split_group (NaturalConv news document; CPED TV series); document_group identifies the concrete conversation/page/question used for per-document slot limits",
+                        "evaluation": "holdout limits select only fresh NaturalConv/CPED; old-source heldouts remain corpus regression data; original spelling and automatic pinyin can be noisy",
+                        "source_limits": limits,
                         "annotation_pool_limits": {split: {source: (limit * 5 + 3) // 4 for source, limit in
-                            (train_limits if split == "train" else eval_limits).items()} for split in SPLITS}},
+                            limits[split].items()} for split in SPLITS}},
               "splits": summaries}
     write_json(evidence / "ranking-data-recipe.json", recipe)
     write_json(evidence / "ranking-data-summary.json", summaries)
@@ -259,14 +280,24 @@ def build(documents, output, evidence, exclusion_paths,
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--documents", type=Path, default=ROOT / "data/cache/general-model-20261021/documents.jsonl")
-    parser.add_argument("--output-dir", type=Path, default=ROOT / "data/cache/general-model-20261021")
-    parser.add_argument("--evidence-dir", type=Path, default=ROOT / "results/general-model-20261021")
+    parser.add_argument("--documents", type=Path, default=ROOT / "data/cache/retrain-20261021/corpus/documents.jsonl")
+    parser.add_argument("--output-dir", type=Path, default=ROOT / "data/cache/retrain-20261021")
+    parser.add_argument("--evidence-dir", type=Path, default=ROOT / "results/retrain-20261021")
     parser.add_argument("--exclude", type=Path, action="append", default=[],
                         help="additional evaluation JSONL to exclude; may be repeated")
+    for split in SPLITS:
+        parser.add_argument(f"--{split}-limit", action="append", default=[], metavar="SOURCE=COUNT",
+                            help="override a source's fixed case budget, including zero; may be repeated")
     args = parser.parse_args()
     exclusions = sorted((ROOT / "data/eval").glob("*.jsonl")) + args.exclude
-    recipe = build(args.documents, args.output_dir, args.evidence_dir, exclusions)
+    limits = {"train": dict(TRAIN_LIMITS), "dev": dict(DEV_LIMITS), "holdout": dict(HOLDOUT_LIMITS)}
+    for split in SPLITS:
+        for assignment in getattr(args, split + "_limit"):
+            source, separator, value = assignment.partition("=")
+            if not separator or source not in limits[split] or not value.isdecimal():
+                parser.error(f"--{split}-limit requires a known SOURCE and nonnegative COUNT")
+            limits[split][source] = int(value)
+    recipe = build(args.documents, args.output_dir, args.evidence_dir, exclusions, **{split + "_limits": value for split, value in limits.items()})
     print(json.dumps({split: value["cases"] for split, value in recipe["splits"].items()}), flush=True)
 
 

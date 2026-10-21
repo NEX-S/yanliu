@@ -2,6 +2,7 @@
 import importlib.util
 from contextlib import nullcontext
 import json
+import math
 from pathlib import Path
 import subprocess
 import sys
@@ -36,6 +37,13 @@ def write_spec(path, config=CONFIG, vocab=VOCAB, provenance=PROVENANCE):
 
 
 class SpecTests(unittest.TestCase):
+    def test_learning_rate_tracks_effective_targets_and_caps_warmup(self):
+        self.assertEqual(TRAIN.learning_rate(250, 10_000, 64, 0.001), 0.0005)
+        self.assertEqual(TRAIN.learning_rate(500, 10_000, 64, 0.001), 0.001)
+        self.assertAlmostEqual(TRAIN.learning_rate(5_250, 10_000, 64, 0.001), 0.00055)
+        self.assertAlmostEqual(TRAIN.learning_rate(10_000, 10_000, 64, 0.001), 0.0001)
+        self.assertEqual(TRAIN.learning_rate(3_200, 1_000_000, 64, 0.001), 0.0005)
+
     def test_explicit_shape_vocabulary_and_provenance_are_preserved(self):
         with tempfile.TemporaryDirectory(prefix="pretraining-spec-", dir=CACHE) as directory:
             path = Path(directory) / "spec.json"
@@ -113,9 +121,51 @@ class TextTrainingTests(unittest.TestCase):
             self.assertEqual(inputs.tolist(), [[2, 3, 1]])
             self.assertEqual(targets.tolist(), [[3, 0, 0]])
             self.assertEqual(count, 1)
+            inputs, targets, count = TRAIN.text_batch(corpus, slice(1, 2), "cpu", torch)
+            self.assertEqual(inputs.tolist(), [[1]])
+            self.assertEqual(targets.tolist(), [[4]])
+            self.assertEqual(count, 1)
             source.write_text("未知\n\n", encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "no effective training targets"):
                 TRAIN.encode_text(source, VOCAB, 3, directory / "empty.u16")
+
+    def test_length_batches_cover_all_blocks_with_bounded_positions_and_equal_loss(self):
+        import numpy as np
+        with tempfile.TemporaryDirectory(prefix="length-batches-", dir=CACHE) as directory:
+            directory = Path(directory)
+            source = directory / "text.txt"
+            source.write_text("你\n" * 70 + "你未好\n" * 23 + "你好世界" * 33 + "\n",
+                              encoding="utf-8")
+            corpus, counts = TRAIN.encode_text(source, VOCAB, 64, directory / "tokens.u16")
+            groups = TRAIN.length_groups(corpus)
+            batches = TRAIN.text_batches(groups, 64, np.random.default_rng(7))
+            self.assertEqual(sorted(np.concatenate(batches).tolist()), list(range(len(corpus))))
+            self.assertEqual([tuple(batch) for batch in batches],
+                             [tuple(batch) for batch in TRAIN.text_batches(groups, 64, np.random.default_rng(7))])
+            self.assertNotEqual([tuple(batch) for batch in batches],
+                                [tuple(batch) for batch in TRAIN.text_batches(groups, 64, np.random.default_rng(8))])
+            model = TRAIN.initialize_random(CONFIG, torch, 7)
+            model.eval()
+            full = torch.tensor(np.array(corpus, dtype="int64"))
+            full_targets = full[:, 1:].clone()
+            full_targets[full_targets == 1] = 0
+            total = count = 0
+            underfilled = []
+            with torch.inference_mode():
+                _, full_loss = model(full[:, :-1], full_targets)
+                for indices in batches:
+                    inputs, targets, n = TRAIN.text_batch(corpus, indices, "cpu", torch)
+                    spans = np.count_nonzero(corpus[indices, 1:], axis=1)
+                    self.assertTrue(np.all(spans == inputs.shape[1]))
+                    self.assertLessEqual(inputs.numel(), 64)
+                    if len(indices) < 64 // inputs.shape[1]:
+                        underfilled.append(inputs.shape[1])
+                    _, loss = model(inputs, targets)
+                    total += loss.item() * n
+                    count += n
+            self.assertEqual(len(underfilled), len(set(underfilled)))
+            self.assertEqual(count, counts["effective_targets"])
+            self.assertTrue(math.isclose(total / count, full_loss.item(), rel_tol=1e-6))
 
     def test_random_weights_use_explicit_provenance_and_known_target_budget(self):
         with tempfile.TemporaryDirectory(prefix="fresh-pretraining-", dir=CACHE) as directory:
@@ -143,6 +193,9 @@ class TextTrainingTests(unittest.TestCase):
             self.assertEqual(recipe["provenance"], PROVENANCE)
             self.assertEqual(recipe["spec"]["sha256"], TRAIN.digest(source))
             self.assertEqual(recipe["data"], {"train": TRAIN.digest(train), "dev": TRAIN.digest(dev)})
+            self.assertEqual(recipe["batching"]["position_budget"], 128)
+            self.assertEqual(recipe["optimizer"]["planned_effective_targets"], 5)
+            self.assertEqual(recipe["optimizer"]["warmup_effective_targets"], 0.25)
             with safe_open(str(output / "best-f32.safetensors"), framework="pt") as artifact:
                 metadata = artifact.metadata()
                 self.assertEqual(metadata["initialization"], "random")

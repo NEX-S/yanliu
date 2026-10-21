@@ -17,7 +17,7 @@ SPEC.loader.exec_module(BUILD)
 
 
 def row(group="a", split="train", source="lccc", paragraph=0, text=None):
-    return {"source": source, "group": group, "paragraph": paragraph, "split": split,
+    return {"source": source, "group": group, "split_group": group, "paragraph": paragraph, "split": split,
             "text": text or "今天我们一起到公园散步然后回家喝茶聊天讨论明天的工作安排"}
 
 
@@ -42,6 +42,16 @@ class RankingCorpusTests(unittest.TestCase):
         self.assertEqual((single["input"], single["context"]), ("hang", "银"))
         self.assertEqual(single["source_group"], "lccc:polyphone")
         self.assertEqual(single["group_id"], single["source_group"])
+
+    def test_context_preserves_previous_dialogue_turn_at_han_run_boundary(self):
+        paragraphs = [row(group="previous-turn-2", text="明天去哪里？银行。")]
+        proposals = BUILD.document_proposals(paragraphs, Counter())
+        bank = next(proposal for proposal in proposals if proposal["case"]["gold"] == "银行")
+        self.assertEqual(bank["target_start"], 0)
+        self.assertEqual(bank["run"], "银行")
+        case = BUILD.annotate(bank)
+        self.assertEqual(case["context"], "明天去哪里？")
+        self.assertEqual(case["input"], "yinhang")
 
     def test_hash_sampling_caps_documents_and_context_without_looking_at_candidates(self):
         text = "今天我们一起到公园散步然后回家喝茶聊天讨论明天的工作安排" * 4
@@ -94,6 +104,12 @@ class RankingCorpusTests(unittest.TestCase):
             self.assertIn(BUILD.query_key({"input": "ru", "context": "出", "gold": "入"}), excluded)
             self.assertNotIn(BUILD.query_key({"input": "ru", "context": "加", "gold": "入"}), excluded)
             self.assertEqual(files[0]["sha256"], BUILD.digest(path))
+
+    def test_query_dedup_matches_training_boundary_punctuation_and_unicode_normalization(self):
+        first = {"input": "ＲＵ", "context": "你 来。", "gold": "入"}
+        second = {"input": "ru", "context": "你来！", "gold": "入"}
+        self.assertEqual(BUILD.query_key(first), BUILD.query_key(second))
+        self.assertNotEqual(BUILD.query_key(first), BUILD.query_key(dict(second, context="他来")))
 
     def test_cli_uses_public_evaluations_and_explicit_repeatable_exclusions(self):
         with tempfile.TemporaryDirectory(prefix="ranking-cli-", dir=CACHE) as temporary:
@@ -150,7 +166,8 @@ class RankingCorpusTests(unittest.TestCase):
             for rows in ([row(), row(split="dev", paragraph=1)],
                          [row(), row()], [row(), row(group="b"), row(paragraph=1)],
                          [dict(row(), paragraph=True)], [dict(row(), source=[])],
-                         [dict(row(), split="validation")]):
+                         [dict(row(), split="validation")], [dict(row(), split_group=False)],
+                         [row(), dict(row(group="b", split="dev"), split_group="a")]):
                 with self.subTest(rows=rows):
                     write_rows(path, rows)
                     with self.assertRaises(ValueError) as error:
@@ -171,11 +188,11 @@ class RankingCorpusTests(unittest.TestCase):
                         ownership[source + ":" + group] = split
             write_rows(documents, rows)
             limits = {source: 2 for source in BUILD.TRAIN_LIMITS}
-            BUILD.build(documents, directory / "baseline", directory / "baseline-evidence", [], limits, limits)
+            BUILD.build(documents, directory / "baseline", directory / "baseline-evidence", [], limits, limits, limits)
             blocked = read_rows(directory / "baseline" / "ranking-train.jsonl")[0]
             write_rows(exclusions, [blocked])
-            first = BUILD.build(documents, directory / "out-a", directory / "evidence-a", [exclusions], limits, limits)
-            second = BUILD.build(documents, directory / "out-b", directory / "evidence-b", [exclusions], limits, limits)
+            first = BUILD.build(documents, directory / "out-a", directory / "evidence-a", [exclusions], limits, limits, limits)
+            second = BUILD.build(documents, directory / "out-b", directory / "evidence-b", [exclusions], limits, limits, limits)
             self.assertEqual(first["pypinyin_version"], version("pypinyin"))
             self.assertEqual(first["documents"]["sha256"], BUILD.digest(documents))
             queries, ids = set(), set()
@@ -217,7 +234,23 @@ class RankingCorpusTests(unittest.TestCase):
             self.assertGreater(budget_count, 0)
             self.assertEqual(first["splits"]["train"]["source_stats"]["cqia"]["written"], 0)
             with self.assertRaises(FileExistsError):
-                BUILD.build(documents, directory / "out-a", directory / "evidence-a", [exclusions], limits, limits)
+                BUILD.build(documents, directory / "out-a", directory / "evidence-a", [exclusions], limits, limits, limits)
+
+    def test_fresh_holdout_has_independent_budgets_and_keeps_real_split_group(self):
+        with tempfile.TemporaryDirectory(prefix="ranking-fresh-", dir=CACHE) as temporary:
+            directory = Path(temporary)
+            documents = directory / "documents.jsonl"
+            rows = [dict(row(group=f"{source}-{i}", source=source, split="holdout"), split_group=f"{source}-one-series")
+                    for source in ("lccc", "naturalconv", "cped") for i in range(8)]
+            write_rows(documents, rows)
+            recipe = BUILD.build(documents, directory / "out", directory / "evidence", [])
+            cases = read_rows(directory / "out/ranking-holdout.jsonl")
+            self.assertEqual(set(recipe["splits"]["holdout"]["source"]), {"naturalconv", "cped"})
+            self.assertGreater(len(cases), 2)
+            self.assertTrue(all(case["source_group"].endswith("-one-series") for case in cases))
+            self.assertEqual(len({case["document_group"] for case in cases}), len(cases))
+            self.assertTrue(all(case["group_id"] == case["source_group"] for case in cases))
+            self.assertEqual(recipe["splits"]["holdout"]["source_groups"]["cped"], 1)
 
 
 if __name__ == "__main__":

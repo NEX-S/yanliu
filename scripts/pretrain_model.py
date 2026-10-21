@@ -117,7 +117,9 @@ def encode_text(path, vocab, window, destination):
 
 def text_batch(corpus, indices, device, torch, token_limit=None):
     import numpy as np
-    tokens = torch.from_numpy(np.array(corpus[indices], dtype="int64", copy=True))
+    blocks = np.array(corpus[indices], dtype="int64", copy=True)
+    span = np.count_nonzero(blocks[:, 1:], axis=1).max()
+    tokens = torch.from_numpy(blocks[:, :span + 1])
     inputs, targets = tokens[:, :-1].contiguous(), tokens[:, 1:].clone()
     targets[targets == 1] = 0
     valid = targets.flatten().nonzero().flatten()
@@ -131,19 +133,36 @@ def text_batch(corpus, indices, device, torch, token_limit=None):
     return inputs.to(device), targets.to(device), count
 
 
-def evaluate_text(model, corpus, batch, device, precision, torch):
+def length_groups(corpus):
+    import numpy as np
+    lengths = np.count_nonzero(corpus[:, 1:], axis=1)
+    return [(length, np.flatnonzero(lengths == length))
+            for length in range(1, corpus.shape[1])]
+
+
+def text_batches(groups, position_budget, rng=None):
+    batches = []
+    for length, indices in groups:
+        order = rng.permutation(indices) if rng is not None else indices
+        size = position_budget // length
+        batches.extend(order[start:start + size] for start in range(0, len(order), size))
+    if rng is not None:
+        return [batches[index] for index in rng.permutation(len(batches))]
+    return batches
+
+
+def evaluate_text(model, corpus, batches, device, precision, torch):
     was_training = model.training
     model.eval()
     total = count = 0
     with torch.inference_mode():
-        for start in range(0, len(corpus), batch):
-            inputs, targets, n = text_batch(corpus, slice(start, start + batch), device, torch)
+        for number, indices in enumerate(batches, 1):
+            inputs, targets, n = text_batch(corpus, indices, device, torch)
             with autocast(device, precision, torch):
                 _, loss = model(inputs, targets)
             value = loss.item()
             if not math.isfinite(value):
-                raise ValueError(f"nonfinite development text loss at batch {start // batch + 1}, "
-                                 f"blocks {start}:{min(start + batch, len(corpus))}, effective_targets={n}")
+                raise ValueError(f"nonfinite development text loss at batch {number}, effective_targets={n}")
             total += value * n
             count += n
     model.train(was_training)
@@ -164,11 +183,11 @@ def save_best(model, metadata, path, torch, save_file):
     temporary.replace(path)
 
 
-def learning_rate(step, estimated_steps, peak):
-    warmup = max(1, min(100, estimated_steps // 20))
-    if step < warmup:
-        return peak * (step + 1) / warmup
-    progress = min(1.0, (step - warmup) / max(1, estimated_steps - warmup))
+def learning_rate(seen_targets, planned_targets, position_budget, peak):
+    warmup = min(planned_targets * 0.05, 100 * position_budget)
+    if seen_targets < warmup:
+        return peak * seen_targets / warmup
+    progress = min(1.0, (seen_targets - warmup) / (planned_targets - warmup))
     return peak * (0.1 + 0.9 * 0.5 * (1 + math.cos(math.pi * progress)))
 
 
@@ -181,7 +200,8 @@ def parser():
     result.add_argument("--epochs", type=int, default=12)
     result.add_argument("--max-tokens", type=int, default=300_000_000)
     result.add_argument("--max-seconds", type=float, default=6 * 60 * 60)
-    result.add_argument("--batch", type=int, default=16)
+    result.add_argument("--batch", type=int, default=16,
+                        help="token-position budget in equivalent 64-target windows per update")
     result.add_argument("--lr", type=float, default=3e-4)
     result.add_argument("--threads", type=int, default=4)
     result.add_argument("--seed", type=int, default=20261020)
@@ -211,8 +231,12 @@ def main():
     args.output_dir.mkdir(parents=True, exist_ok=False)
     train, train_counts = encode_text(args.train, vocab, config["context"], args.output_dir / "train.tokens.u16")
     dev, dev_counts = encode_text(args.dev, vocab, config["context"], args.output_dir / "dev.tokens.u16")
+    position_budget = args.batch * config["context"]
+    planned_targets = min(args.max_tokens, train_counts["effective_targets"] * args.epochs)
+    train_groups = length_groups(train)
+    dev_batches = text_batches(length_groups(dev), position_budget)
     sources = [Path(__file__).resolve(), ROOT / "vendor/chinese-ime-training/neural/model.py"]
-    recipe = {"format": "yanliu-random-pretraining-v2", "arguments": {
+    recipe = {"format": "yanliu-random-pretraining-v3", "arguments": {
         key: str(value) if isinstance(value, Path) else value for key, value in vars(args).items()},
         "torch": torch.__version__, "config": config, "initialization": "random; no parent weights loaded",
         "runtime": {"device": args.device, "precision": args.precision,
@@ -225,8 +249,12 @@ def main():
         "source": {str(path.relative_to(ROOT)): digest(path) for path in sources},
         "optimizer": {"name": "AdamW", "betas": [0.9, 0.95], "weight_decay": 0.01,
                       "clip_norm": 1.0, "main_parameter_precision": "float32",
-                      "schedule": "5% warmup (1..100 steps); cosine to 10% peak LR"},
-        "sampling": "each paragraph separately; nonoverlapping target chunks, previous token retained at chunk boundary; shuffled blocks once per epoch; no cross-line concatenation; PAD0 and UNK1 targets ignored; UNK1 retained in inputs; blocks without known targets omitted",
+                      "planned_effective_targets": planned_targets,
+                      "warmup_effective_targets": min(planned_targets * 0.05, 100 * position_budget),
+                      "schedule": "cumulative effective targets including the current update; warmup then cosine to 10% peak LR; peak LR is not scaled with batch size"},
+        "batching": {"position_budget": position_budget, "batch_argument": "equivalent 64-target windows",
+                     "method": "group blocks by non-PAD target span 1..64; shuffle within each group; batch size=floor(position_budget/span); shuffle batches each epoch; crop each batch to its non-PAD span; each block occurs once per complete epoch; development uses the same grouping without shuffling"},
+        "sampling": "each paragraph separately; nonoverlapping target chunks, previous token retained at chunk boundary; no cross-line concatenation; PAD0 and UNK1 targets ignored; UNK1 retained in inputs; blocks without known targets omitted",
         "limits": "stop at first epoch/token/wall-time budget; evaluate after final partial epoch; stop after two consecutive dev CE non-improvements",
         "provenance": provenance,
         "selection": "lowest complete text dev next-character CE; ties keep earlier checkpoint"}
@@ -245,33 +273,30 @@ def main():
                 "training_spec_sha256": spec_sha, "training_recipe_sha256": recipe_sha,
                 "train_sha256": recipe["data"]["train"], "dev_sha256": recipe["data"]["dev"]}
     started = time.monotonic()
-    best = evaluate_text(model, dev, args.batch, args.device, args.precision, torch)
+    best = evaluate_text(model, dev, dev_batches, args.device, args.precision, torch)
     best.update(epoch=0, optimizer_steps=0, training_effective_targets=0)
     best_path = args.output_dir / "best-f32.safetensors"
     save_best(model, dict(metadata, training_steps="0", training_effective_targets="0",
                           validation_loss=str(best["cross_entropy"])), best_path, torch, save_file)
     records = [dict(best)]
     steps = seen = stale = 0
-    average_targets = train_counts["effective_targets"] / len(train)
-    estimated_steps = min(math.ceil(len(train) / args.batch) * args.epochs,
-                          max(1, math.ceil(args.max_tokens / (args.batch * average_targets))))
     stop = "epoch_limit"
     for epoch in range(1, args.epochs + 1):
-        order = np.random.default_rng(args.seed + epoch).permutation(len(train))
+        batches = text_batches(train_groups, position_budget, np.random.default_rng(args.seed + epoch))
         model.train()
         epoch_total = epoch_tokens = ignored = 0
         epoch_started = time.monotonic()
-        for start in range(0, len(order), args.batch):
+        for indices in batches:
             if seen >= args.max_tokens:
                 stop = "token_limit"
                 break
             if time.monotonic() - started >= args.max_seconds:
                 stop = "time_limit"
                 break
-            inputs, targets, n = text_batch(train, order[start:start + args.batch], args.device,
+            inputs, targets, n = text_batch(train, indices, args.device,
                                            torch, token_limit=args.max_tokens - seen)
             for group in optimizer.param_groups:
-                group["lr"] = learning_rate(steps, estimated_steps, args.lr)
+                group["lr"] = learning_rate(seen + n, planned_targets, position_budget, args.lr)
             optimizer.zero_grad(set_to_none=True)
             with autocast(args.device, args.precision, torch):
                 _, loss = model(inputs, targets)
@@ -293,7 +318,7 @@ def main():
                                   "effective_targets_per_second": epoch_tokens / elapsed,
                                   "seconds": time.monotonic() - started}), flush=True)
         train_seconds = time.monotonic() - epoch_started
-        current = evaluate_text(model, dev, args.batch, args.device, args.precision, torch)
+        current = evaluate_text(model, dev, dev_batches, args.device, args.precision, torch)
         current.update(epoch=epoch, optimizer_steps=steps, training_effective_targets=seen,
                        train_cross_entropy=epoch_total / epoch_tokens if epoch_tokens else None,
                        epoch_effective_targets=epoch_tokens, epoch_ignored_targets=ignored,

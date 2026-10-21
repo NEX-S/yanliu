@@ -67,7 +67,9 @@ python3 -m venv .cache/yanliu-training
 
 `scripts/pretrain_model.py` 对每行独立的 UTF-8 段落做下一字符预训练。`--spec` 指定 JSON 文件，其中 `config` 包含 `vocab/n_layer/n_head/n_embd/context/dropout`，`vocab` 是以 `<pad>/<unk>/<bos>` 开头的完整字符表，`provenance` 声明 `license/data_classification/attribution` 及实际数据来源。全部参数随机初始化。字符表应在训练前核对常用字覆盖，开发文本须来自独立来源组；按完整开发集 CE 保留最佳 F32 权重。默认最多 12 遍、3 亿有效目标字符或 6 小时，先到即停，开发 CE 连续两次不改善也会停止；这些预算可通过参数调整。
 
-Intel GPU 需要单独的 XPU 环境，按 [PyTorch Intel GPU 指南](https://docs.pytorch.org/docs/2.14/notes/get_start_xpu.html)安装对应构建，并安装 `numpy==2.5.4`、`safetensors==0.8.0`；不要把上述 CPU requirements 安装进 XPU 环境。请求 XPU 而设备不可用时直接报错，不回退 CPU。当前 NPU 路径用于推理。
+`--batch` 表示 64 字符窗口的等效位置预算，例如 `--batch 16` 每次更新最多处理 1024 个输入位置。编码仍按独立段落加 BOS、每 64 个目标切块，不跨段拼接；训练时按每块非 PAD 目标跨度 1..64 分组，每组打乱后按 `floor(batch*64/跨度)` 条切批，再打乱批次顺序，每个完整 epoch 恰好覆盖每块一次。张量裁到当前批次的实际跨度，短段无需补到 64；开发集按相同长度分组完整评估。UNK 保留在输入中，PAD/UNK 目标忽略，`--max-tokens` 精确限制有效目标数。学习率按实际累计有效目标字符推进，预热长度为计划有效目标的 5% 与 100 次位置预算的较小值，随后余弦降到峰值的 10%；峰值 `--lr` 不随 batch 自动放大。这些含义与实际预算均写入 recipe。
+
+Intel GPU 需要单独的 XPU 环境，按 [PyTorch Intel GPU 指南](https://docs.pytorch.org/docs/2.14/notes/get_start_xpu.html)安装对应构建，并安装 `numpy==2.5.4`、`safetensors==0.8.0`；不要把上述 CPU requirements 安装进 XPU 环境。CPU 训练使用显式 fp32，XPU/bf16 使用 MATH SDPA，避免本机 fused BF16 attention 曾出现的非有限值；训练检查 loss 与梯度是否有限。请求 XPU 而设备不可用时直接报错，不回退 CPU。当前 NPU 路径用于推理。
 
 ```sh
 ONEAPI_DEVICE_SELECTOR=level_zero:gpu /path/to/xpu-env/bin/python scripts/pretrain_model.py \
@@ -90,25 +92,30 @@ ONEAPI_DEVICE_SELECTOR=level_zero:gpu /path/to/xpu-env/bin/python scripts/train_
 
 ### 准备公共中文语料
 
-`scripts/prepare_general_corpus.py` 使用固定版本的 LCCC 日常对话、中文 Wikipedia、COIG-CQIA 人类回答与 TNEWS 标题。原始文件须先放到 `data/cache/general-model-20261021/sources/`，文件名、上游版本和地址见脚本中的 `SOURCE_FILES`；同目录的 `1.txt/2.txt/3.txt` 分别提供 3500、3000、1605 个规范汉字，可从[固定版本的字表抄录](https://gist.github.com/z-rui/4cb3431f2bcf26ea39cd569a58e66003/5c4510138344632327abcf966195aa8314e5c84b)获取。数据准备使用独立环境：
+`scripts/prepare_general_corpus.py` 使用固定版本的 LCCC 日常对话、中文 Wikipedia、COIG-CQIA 人类回答、TNEWS 标题，以及新增的 NaturalConv、CPED 纯文本对话。原始文件须先放到 `data/cache/retrain-20261021/sources/`，文件名、上游版本、URL 与哈希见脚本中的 `SOURCE_FILES`；同目录的 `1.txt/2.txt/3.txt` 分别提供 3500、3000、1605 个规范汉字，可从[固定版本的字表抄录](https://gist.github.com/z-rui/4cb3431f2bcf26ea39cd569a58e66003/5c4510138344632327abcf966195aa8314e5c84b)获取。数据准备使用独立环境：
 
 ```sh
 python3 -m venv .cache/yanliu-corpus
 .cache/yanliu-corpus/bin/python -m pip install -r scripts/corpus-requirements.txt
 .cache/yanliu-corpus/bin/python scripts/prepare_general_corpus.py \
-  --output data/cache/general-model-20261021/corpus \
-  --evidence results/general-model-20261021/data-preparation
+  --output data/cache/retrain-20261021/corpus \
+  --evidence results/retrain-20261021/data-preparation \
+  --previous-train data/cache/general-model-20261021/corpus/train.txt \
+  --exclude data/cache/general-model-20261021/ranking-holdout.jsonl
 .cache/yanliu-corpus/bin/python scripts/build_ranking_corpus.py \
-  --documents data/cache/general-model-20261021/corpus/documents.jsonl \
-  --output-dir data/cache/general-model-20261021 \
-  --evidence-dir results/general-model-20261021
+  --documents data/cache/retrain-20261021/corpus/documents.jsonl \
+  --output-dir data/cache/retrain-20261021 \
+  --evidence-dir results/retrain-20261021 \
+  --exclude data/cache/general-model-20261021/ranking-holdout.jsonl
 ```
 
-准备程序先按完整会话、页面或问题分配 train/dev/holdout，再清洗、规范化去重与排除已有公开评测内容。训练文本保留中文标点；词表包含全部 8105 规范汉字、词库单字、ASCII、固定标点和训练集高频扩展字符。`data-recipe.json` 保留来源哈希、规则、各来源数量、字符覆盖、实际训练频次覆盖与 OOV 统计；`small-spec.json` 和 `large-spec.json` 共享同一词表，可直接传给预训练的 `--spec`。
+准备程序先分配来源大组，再清洗、规范化去重与排除已有公开评测内容。LCCC、NaturalConv、CPED 逐句清洗后按原轮序连接，补足缺少的句末标点，再限长切段；不跨会话连接。CQIA 仅收人类正文，同一来源域的问题共用 split、保留全部不同回答，再按正文去重，不收小红书营销源。NaturalConv 同一 `document_id` 的所有会话共用 80/10/10 的稳定 hash 划分，研究已见的 0..6 号新闻整体排除；CPED 同一 `TV_ID` 共用官方 26/5/9 部剧的 train/dev/holdout 划分，`Dialogue_ID` 只界定具体对话。`documents.jsonl` 的 `group` 表示具体会话/页面/问题，`split_group` 表示不能跨 split 的相关来源组，新增来源分配冻结到 `source-groups.json`。新增 dev/holdout 还按相同 exact/near 正文规则排除旧 `train.txt` 的重复，旧训练文件只用于防污染，不排除新训练内容的合理复用。
 
-排序案例继承原文档 split，先按固定 hash 和来源预算选样，再对完整连续汉字段注音后截取目标。它不调用模型、不按召回或成绩挑样，实际数量不足时如实记录。自动拼音仍可能误读多音字，因此这些案例是自动监督数据。`ranking-dev.jsonl` 用于选模；`ranking-holdout.jsonl` 和 `corpus/holdout.txt` 保留至训练与策略冻结后评估，不传给训练入口。
+训练预算默认分别为 LCCC 15M、Wikipedia 25M、CQIA 最多 12M、NaturalConv 最多 2M、CPED 全训练集（1M 上限）、TNEWS 1M 字符，不足如实记录。NaturalConv 的训练抽样审查发现同音错字和表达问题，因此只作少量口语补充，不自动改写原文，也不将抽样错误比例推为总体错误率。训练文本保留中文标点；词表包含全部 8105 规范汉字、词库单字、ASCII、固定标点和训练集高频扩展字符。`data-recipe.json` 保留来源哈希、质量备注、规则、来源数量、实际训练频次覆盖与 OOV。`compact-spec.json`（6 层×192、4 头）、`small-spec.json`（6 层×256、4 头）、`large-spec.json`（8 层×448、8 头）共享字表和 64 字符窗口，可直接传给预训练的 `--spec`。
 
-构建排序案例默认使用仓库内的 `data/eval/*.jsonl` 排除已有评测查询；需要额外排除时可重复传入 `--exclude PATH`，显式指定的文件必须存在。额外文件的路径和 SHA-256 会进入配方，不会自动扫描本地 `results/` 或个人数据。
+排序案例继承原文档 split，先按固定 hash 和各来源独立预算选样，再对完整连续汉字段注音后截取目标。需要上下文的案例保留目标在同一段落中之前最多 32 个字符，包括标点与前轮话语；已有前文时，目标可从当前汉字段首字开始。无上下文案例仍为空串，不跨不同段落或会话取前文。默认 train 预算 80,000、dev 2,000；fresh holdout 仅收 NaturalConv 最多 1,000 和 CPED 最多 750 例，旧来源 heldout 仅作语料回归。可重复使用 `--train-limit SOURCE=COUNT`、`--dev-limit SOURCE=COUNT`、`--holdout-limit SOURCE=COUNT` 改固定预算。`source_group`/`group_id` 保留真实 split 大组，`document_group` 表示具体采样文档；CPED holdout 最多只有官方 9 部剧的独立大组。程序不调用模型、不按召回或成绩挑样，实际数量不足时如实记录。原文错字及自动拼音可能影响监督，因此这些案例不是干净的人工金标。`ranking-dev.jsonl` 用于选模；`ranking-holdout.jsonl` 和 `corpus/holdout.txt` 保留至训练与策略冻结后评估，不传给训练入口。
+
+语料准备与排序案例构建都默认排除仓库内 `data/eval/*.jsonl`；额外已观测评测须分别向两个命令重复传入 `--exclude PATH`，显式指定的文件必须存在，路径和 SHA-256 进入各自配方。语料按规范化后至少 6 字符的 context+gold 作为子串排除，排序案例按与训练入口一致的 NFKC/casefold/字母数字规范化完整查询去重和排除，不把短常用词整体禁用；不会自动扫描本地 `results/` 或个人数据。
 
 ### 7M 实验配置（2026-10-21）
 
