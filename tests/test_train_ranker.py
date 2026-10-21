@@ -3,8 +3,10 @@ import importlib.util
 import json
 from pathlib import Path
 import struct
+import sys
 import tempfile
 import unittest
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 TEST_CACHE = ROOT / ".cache/training-tests"
@@ -179,6 +181,63 @@ class TrainingTensorTests(unittest.TestCase):
         self.assertEqual(tokens.tolist(), [[2, 3, 4, 5, 6], [2, 3, 4, 5, 6], [2, 3, 4, 7, 0]])
         self.assertEqual(mask.tolist(), [[0, 0, 1, 1], [0, 0, 1, 1], [0, 0, 1, 0]])
         self.assertEqual(bounds, [(0, 3)])
+
+    def test_candidate_only_projection_matches_full_forward_scores_loss_and_gradients(self):
+        sys.path.insert(0, str(ROOT / "vendor/chinese-ime-training/neural"))
+        from model import CharLM, Config
+        groups = [
+            {"context": "前文西安先", "texts": ["现", "西安", "先前文"],
+             "known_mask": [True, True, True], "penalties": [0.0, 0.5, 0.0],
+             "gold_indices": [1]},
+            {"context": "", "texts": ["如", "乳", "入"],
+             "known_mask": [True, False, True], "penalties": [0.0, 0.25, 0.0],
+             "gold_indices": [1, 2]},
+            {"context": "前文" * 8, "texts": ["如", "入入"],
+             "known_mask": [True, True], "penalties": [0.0, 0.5],
+             "gold_indices": [1]},
+        ]
+        original_groups = json.loads(json.dumps(groups))
+        tokens, mask, bounds = TRAIN.encode(groups, VOCAB, 8, torch)
+        original_tokens, original_mask = tokens.clone(), mask.clone()
+        self.assertEqual(tokens.shape, (8, 8))
+        self.assertEqual(int(mask.sum()), 12)
+        self.assertLess(int(mask.sum()), mask.numel())
+        torch.manual_seed(71)
+        model = CharLM(Config(vocab=len(VOCAB), n_layer=2, n_head=2, n_embd=16,
+                              context=8, dropout=0.3))
+        for training in [False, True]:
+            with self.subTest(training=training):
+                model.train(training)
+                model.zero_grad(set_to_none=True)
+                torch.manual_seed(73)
+                logits, _ = model(tokens[:, :-1])
+                logp = logits.float().log_softmax(-1).gather(-1, tokens[:, 1:, None]).squeeze(-1)
+                expected_scores = (logp * mask).sum(-1) / mask.sum(-1)
+                expected_loss = TRAIN.ranking_loss(expected_scores, groups, bounds, torch)
+                expected_rng = torch.get_rng_state()
+                expected_loss.backward()
+                expected_gradients = {name: parameter.grad.clone()
+                                      for name, parameter in model.named_parameters()}
+
+                model.zero_grad(set_to_none=True)
+                torch.manual_seed(73)
+                with mock.patch.object(model.head, "forward", wraps=model.head.forward) as head:
+                    scores = TRAIN.language_scores(model, tokens, mask, torch)
+                self.assertEqual(head.call_count, 1)
+                self.assertEqual(head.call_args.args[0].shape, (int(mask.sum()), model.cfg.n_embd))
+                self.assertTrue(torch.equal(torch.get_rng_state(), expected_rng))
+                loss = TRAIN.ranking_loss(scores, groups, bounds, torch)
+                torch.testing.assert_close(scores, expected_scores, rtol=1e-6, atol=1e-6)
+                torch.testing.assert_close(loss, expected_loss, rtol=1e-6, atol=1e-6)
+                loss.backward()
+                for name, parameter in model.named_parameters():
+                    with self.subTest(parameter=name):
+                        torch.testing.assert_close(parameter.grad, expected_gradients[name],
+                                                   rtol=1e-5, atol=1e-7)
+                self.assertEqual(groups, original_groups)
+                self.assertTrue(torch.equal(tokens, original_tokens))
+                self.assertTrue(torch.equal(mask, original_mask))
+                self.assertEqual(bounds, [(0, 3), (3, 6), (6, 8)])
 
     def test_loss_contains_static_prior_and_leader_promotion_margin(self):
         values = torch.tensor([-2.0, -1.0], requires_grad=True)

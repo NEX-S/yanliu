@@ -51,6 +51,8 @@ OPENAI_BASE_URL="${ANTHROPIC_BASE_URL%/anthropic}/openai" \
 
 `scripts/train_ranker.py` 用明确提供的 train/dev JSONL 和实际 CLI 候选做监督训练，默认 CPU/fp32，不读取系统学习，不向召回补入答案。训练分数包含当前词库静态差和首选提升门槛；每轮导出 f32/int8 并通过实际 CLI 比较开发集，按 `group_id`（未提供时按拼音）等权首选命中选择 checkpoint，包含未更新的 epoch 0，平局选更早的轮次。F32 输入的 epoch 0 是其实际 int8 导出；int8 输入另检查原模型与 epoch 0 的逐例结果一致。没有收益时保留原模型。
 
+Transformer 使用完整前文，词表投影只计算候选字位置，避免为不参与排序损失的前文生成 logits。普通文本 CE 使用段落中的全部有效目标字符。
+
 ```sh
 python3 -m venv .cache/yanliu-training
 .cache/yanliu-training/bin/python -m pip install -r scripts/training-requirements.txt

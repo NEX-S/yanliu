@@ -195,9 +195,17 @@ def encode(groups, vocab, window, torch):
 
 
 def language_scores(model, tokens, mask, torch):
-    logits, _ = model(tokens[:, :-1])
-    logp = logits.float().log_softmax(-1).gather(-1, tokens[:, 1:, None]).squeeze(-1)
-    return (logp * mask).sum(-1) / mask.sum(-1)
+    inputs = tokens[:, :-1]
+    positions = torch.arange(inputs.shape[1], device=inputs.device)
+    x = model.drop(model.tok(inputs) + model.pos(positions))
+    for block in model.blocks:
+        x = block(x)
+    x = model.ln_f(x)
+    rows, positions = mask.nonzero(as_tuple=True)
+    logits = model.head(x[rows, positions])
+    targets = tokens[rows, positions + 1, None]
+    logp = logits.float().log_softmax(-1).gather(-1, targets).squeeze(-1)
+    return logp.new_zeros(tokens.shape[0]).index_add(0, rows, logp) / mask.sum(-1)
 
 
 def ranking_loss(values, groups, bounds, torch):
@@ -353,6 +361,7 @@ def main():
         "optimizer": {"name": "AdamW", "betas": [0.9, 0.95], "weight_decay": 0.01, "clip_norm": 1.0},
         "loss": ("rankCE + ordinary_text_CE; fixed coefficient 1 for each" if args.text_train else "rankCE"),
         "ranking_loss": "CE(mean_character_logp - direct_word_static_gap * 2 + leader_margin_0.25); gold-set marginal CE",
+        "ranking_projection": "full-context Transformer and dropout; vocabulary head and log_softmax only at nonzero candidate mask positions; mean logp per candidate",
         "oov_policy": "match runtime: ASCII letters or candidates at least context-length neutralize the whole group; skip groups with OOV leader or fewer than two representable candidates; skip groups whose in-shortlist golds are all OOV because their leader-tied language score cannot clear the leader margin; retain the full shortlist and accepted gold identities otherwise; OOV language score equals the differentiable leader language score, leaving static penalties and promotion margin intact",
         "loss_reporting": "mean_loss and mean_rank_loss are group-weighted; text_cross_entropy is effective-target-weighted",
         "text_counts": text_counts,
