@@ -101,13 +101,14 @@ class TrainingDataTests(unittest.TestCase):
         cases = [{"id": str(i), "input": "xian", "context": "前文", "golds": ["西安"]}
                  for i in range(4)]
         rows = [{"id": "0", "candidates": [candidate("现", 2.0, "ExactDictionary"),
-                                               candidate("西安", 0.5)]},
+                                               candidate("西安", 0.5, "ExactDictionary")]},
                 {"id": "1", "candidates": [candidate("现", 2.0), candidate("西安", 0.5)]},
                 {"id": "2", "candidates": [candidate("B站"), candidate("西安")]},
                 {"id": "3", "candidates": [candidate("现"), candidate("先")]}]
         groups, statuses = TRAIN.training_groups(cases, {"rows": rows}, 8, VOCAB)
         self.assertEqual([group["penalties"] for group in groups], [[0.0, 3.0], [0.0, 0.0]])
         self.assertEqual([group["known_mask"] for group in groups], [[True, True], [True, True]])
+        self.assertEqual([group["composed_mask"] for group in groups], [[False, False], [False, False]])
         self.assertEqual(statuses, {"trainable": 2, "neutral_language_group": 1,
                                    "gold_outside_shortlist": 1})
         self.assertEqual(sum(statuses.values()), len(cases))
@@ -116,6 +117,25 @@ class TrainingDataTests(unittest.TestCase):
         self.assertEqual(statuses["no_negative_candidate"], 1)
         with self.assertRaisesRegex(ValueError, "denominator"):
             TRAIN.training_groups(cases, {"rows": rows[:-1]}, 8, VOCAB)
+
+    def test_protected_composed_golds_are_counted_without_changing_shortlists_or_gold_sets(self):
+        cases = [{"id": str(i), "input": "xian", "context": "前文", "golds": golds}
+                 for i, golds in enumerate([["西安"], ["西安", "先"], ["现"], ["西安"]])]
+        candidates = [candidate("现", source="ExactDictionary"), candidate("西安"),
+                      candidate("先", source="ExactDictionary")]
+        rows = [{"id": case["id"], "candidates": candidates} for case in cases]
+        rows[-1] = {"id": "3", "candidates": [candidate("现"), candidate("西安"), candidate("先")]}
+        groups, statuses = TRAIN.training_groups(cases, {"rows": rows}, 8, VOCAB)
+        self.assertEqual(statuses, {"gold_only_protected_composed": 1, "trainable": 3})
+        self.assertEqual(sum(statuses.values()), len(cases))
+        self.assertEqual([group["id"] for group in groups], ["1", "2", "3"])
+        for group in groups:
+            self.assertEqual(group["texts"], ["现", "西安", "先"])
+            self.assertEqual(group["static_indices"], [0, 1, 2])
+            self.assertEqual(group["known_mask"], [True, True, True])
+        self.assertEqual([group["composed_mask"] for group in groups],
+                         [[False, True, False], [False, True, False], [False, False, False]])
+        self.assertEqual([group["gold_indices"] for group in groups], [[1, 2], [0], [1]])
 
     def test_oov_policy_keeps_shortlist_and_gold_identity_with_explicit_exclusions(self):
         cases = [{"id": str(i), "input": "xian", "context": "前文", "golds": golds}
@@ -202,12 +222,15 @@ class TrainingTensorTests(unittest.TestCase):
         groups = [
             {"context": "前文西安先", "texts": ["现", "西安", "先前文"],
              "known_mask": [True, True, True], "penalties": [0.0, 0.5, 0.0],
-             "gold_indices": [1]},
+             "composed_mask": [False, True, False],
+             "gold_indices": [2]},
             {"context": "", "texts": ["如", "乳", "入"],
              "known_mask": [True, False, True], "penalties": [0.0, 0.25, 0.0],
+             "composed_mask": [False, False, False],
              "gold_indices": [1, 2]},
             {"context": "前文" * 8, "texts": ["如", "入入"],
              "known_mask": [True, True], "penalties": [0.0, 0.5],
+             "composed_mask": [False, False],
              "gold_indices": [1]},
         ]
         original_groups = json.loads(json.dumps(groups))
@@ -255,7 +278,8 @@ class TrainingTensorTests(unittest.TestCase):
 
     def test_loss_contains_static_prior_and_leader_promotion_margin(self):
         values = torch.tensor([-2.0, -1.0], requires_grad=True)
-        groups = [{"penalties": [0.0, 2.0], "gold_indices": [1], "known_mask": [True, True]}]
+        groups = [{"penalties": [0.0, 2.0], "gold_indices": [1], "known_mask": [True, True],
+                   "composed_mask": [False, False]}]
         actual = TRAIN.ranking_loss(values, groups, [(0, 2)], torch)
         expected = torch.nn.functional.cross_entropy(torch.tensor([[-1.75, -3.0]]), torch.tensor([1]))
         self.assertAlmostEqual(actual.item(), expected.item(), places=6)
@@ -263,10 +287,25 @@ class TrainingTensorTests(unittest.TestCase):
         self.assertGreater(values.grad[0].item(), 0)
         self.assertLess(values.grad[1].item(), 0)
 
+    def test_composed_cap_preserves_static_penalty_and_uses_the_leaders_gradient(self):
+        values = torch.tensor([-2.0, 99.0, -3.0, -1.0], requires_grad=True)
+        groups = [{"penalties": [0.0, 0.5, 0.5, 0.0], "gold_indices": [3],
+                   "known_mask": [True] * 4, "composed_mask": [False, True, True, False]}]
+        loss = TRAIN.ranking_loss(values, groups, [(0, 4)], torch)
+        scores = torch.tensor([-1.75, -2.5, -3.5, -1.0])
+        expected = torch.nn.functional.cross_entropy(scores[None], torch.tensor([3]))
+        self.assertAlmostEqual(loss.item(), expected.item(), places=6)
+        loss.backward()
+        probabilities = scores.softmax(0)
+        self.assertAlmostEqual(values.grad[0].item(), (probabilities[0] + probabilities[1]).item(), places=6)
+        self.assertEqual(values.grad[1].item(), 0.0)
+        self.assertAlmostEqual(values.grad[2].item(), probabilities[2].item(), places=6)
+        self.assertAlmostEqual(values.grad[3].item(), (probabilities[3] - 1).item(), places=6)
+
     def test_oov_language_score_uses_the_leaders_value_and_gradient(self):
         values = torch.tensor([-2.0, 99.0, -1.0], requires_grad=True)
         groups = [{"penalties": [0.0, 1.0, 0.0], "gold_indices": [2],
-                   "known_mask": [True, False, True]}]
+                   "known_mask": [True, False, True], "composed_mask": [False, False, False]}]
         loss = TRAIN.ranking_loss(values, groups, [(0, 3)], torch)
         scores = torch.tensor([-1.75, -3.0, -1.0])
         expected = torch.nn.functional.cross_entropy(scores[None], torch.tensor([2]))

@@ -139,6 +139,8 @@ def training_groups(cases, report, window, vocab):
         indices = shortlist(case, candidates)
         texts = [candidates[index]["text"] for index in indices]
         known = [all(char in characters for char in text) for text in texts]
+        prior = bool(candidates) and candidates[0]["source"] in {"ExactDictionary", "User"}
+        composed = [prior and candidates[index]["source"] == "Composed" for index in indices]
         if len(indices) < 2 or len(set(texts)) < 2:
             status = "protected_or_no_competition"
         elif any(len(text) >= window or any(ch.isascii() and ch.isalpha() for ch in text)
@@ -155,14 +157,17 @@ def training_groups(cases, report, window, vocab):
             status = "gold_only_unrepresented"
         elif all(text in case["golds"] for text in texts):
             status = "no_negative_candidate"
+        elif not any(is_known and not protected and text in case["golds"]
+                     for text, is_known, protected in zip(texts, known, composed, strict=True)):
+            status = "gold_only_protected_composed"
         else:
             status = "trainable"
-            prior = candidates[0]["source"] in {"ExactDictionary", "User"}
             leader = static_score(candidates[0])
             penalties = [2.0 * max(leader - static_score(candidates[index]), 0.0)
                          if prior else 0.0 for index in indices]
             groups.append({"id": case["id"], "context": case["context"], "texts": texts,
-                           "static_indices": indices, "known_mask": known, "penalties": penalties,
+                           "static_indices": indices, "known_mask": known,
+                           "composed_mask": composed, "penalties": penalties,
                            "gold_indices": [i for i, text in enumerate(texts) if text in case["golds"]]})
         statuses[status] += 1
     return groups, dict(statuses)
@@ -215,6 +220,8 @@ def ranking_loss(values, groups, bounds, torch):
         language = values[start:end]
         known = torch.tensor(group["known_mask"], dtype=torch.bool, device=values.device)
         language = torch.where(known, language, language[0])
+        composed = torch.tensor(group["composed_mask"], dtype=torch.bool, device=values.device)
+        language = torch.where(composed, torch.minimum(language, language[0]), language)
         scores = language - values.new_tensor(group["penalties"])
         scores = scores + values.new_tensor([0.25] + [0.0] * (end - start - 1))
         # A single gold is ordinary CE; an accepted gold set uses its total probability.
@@ -361,7 +368,7 @@ def main():
                          for name in ["8105.dict.yaml", "base.dict.yaml", "ext.dict.yaml"]},
         "optimizer": {"name": "AdamW", "betas": [0.9, 0.95], "weight_decay": 0.01, "clip_norm": 1.0},
         "loss": ("rankCE + ordinary_text_CE; fixed coefficient 1 for each" if args.text_train else "rankCE"),
-        "ranking_loss": "CE(mean_character_logp - direct_word_static_gap * 2 + leader_margin_0.25); gold-set marginal CE",
+        "ranking_loss": "CE(mean_character_logp - direct_word_static_gap * 2 + leader_margin_0.25); gold-set marginal CE; with an ExactDictionary/User leader, Composed language scores are capped at the leader's differentiable language score; groups whose representable golds are all protected Composed candidates are counted and excluded from ranking training, with all development cases retained",
         "ranking_projection": "full-context Transformer and dropout; vocabulary head and log_softmax only at nonzero candidate mask positions; mean logp per candidate",
         "oov_policy": "match runtime: ASCII letters or candidates at least context-length neutralize the whole group; skip groups with OOV leader or fewer than two representable candidates; skip groups whose in-shortlist golds are all OOV because their leader-tied language score cannot clear the leader margin; retain the full shortlist and accepted gold identities otherwise; OOV language score equals the differentiable leader language score, leaving static penalties and promotion margin intact",
         "loss_reporting": "mean_loss and mean_rank_loss are group-weighted; text_cross_entropy is effective-target-weighted",

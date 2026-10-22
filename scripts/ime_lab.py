@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Generate synthetic Chinese cases with deepseek-flash through llmux and check them with yanliu evaluate.
 
-Each round asks the teacher for context/gold/bucket cases, derives the typed input from gold with
+Each round asks the teacher for context/gold/bucket cases, derives target pinyin using context with
 the pinned pypinyin and rejects cases outside the fixed rules. A bad teacher batch is recorded and
 the next round continues; HTTP, gateway and CLI errors stop the run. Finite mode checks all cases
 at the end; --duration-hours checks and records issues after every batch until the deadline.
@@ -88,8 +88,8 @@ def teacher_cases(response):
     return generated["cases"]
 
 
-def pinyin(gold):
-    return "".join(lazy_pinyin(gold, style=Style.NORMAL))
+def pinyin(gold, context=""):
+    return "".join(lazy_pinyin(context + gold, style=Style.NORMAL)[-len(gold):])
 
 
 def load_pairs(path):
@@ -129,7 +129,7 @@ def rejection(case, seen):
         return "answer_in_context"
     if (case["context"], case["gold"]) in seen:
         return "duplicate_case"
-    if not INPUT.fullmatch(pinyin(case["gold"])):
+    if not INPUT.fullmatch(pinyin(case["gold"], case["context"])):
         return "pinyin_unavailable_or_length"
     return None
 
@@ -149,7 +149,7 @@ def select_cases(generated, seen, round_number, response_sha256, pairs=None):
             continue
         batch_seen.add((case["context"], case["gold"]))
         accepted.append((index, {"id": f"teacher-r{round_number:03d}-c{index:03d}-{response_sha256[:12]}",
-                                 "input": pinyin(case["gold"]), **case}))
+                                 "input": pinyin(case["gold"], case["context"]), **case}))
     if pairs is not None:
         groups = {}
         for index, case in accepted:

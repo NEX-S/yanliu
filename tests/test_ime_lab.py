@@ -27,6 +27,15 @@ def completion(content):
 
 
 class ImeLabTests(unittest.TestCase):
+    def test_target_pinyin_keeps_phrase_context_but_only_consumes_the_target(self):
+        generated = [case(context="银", gold="行", bucket="daily"),
+                     case(context="这是一位行", gold="长", bucket="daily")]
+        accepted, rejected = lab.select_cases(generated, set(), 1, "a" * 64)
+        self.assertEqual(rejected, [])
+        self.assertEqual([row["input"] for row in accepted], ["hang", "zhang"])
+        self.assertEqual(lab.pinyin("行"), "xing")
+        self.assertEqual(lab.pinyin("银行"), "yinhang")
+
     def test_bad_teacher_batches_are_recorded_and_accepted_cases_are_checked_once(self):
         first = json.dumps({"cases": [case()]})
         last = json.dumps({"cases": [case(gold="银行", bucket="daily")]})

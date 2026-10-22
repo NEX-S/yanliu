@@ -106,10 +106,19 @@ impl Model {
             candidates[0].source,
             CandidateSource::ExactDictionary | CandidateSource::User
         );
+        let leader_language = language[0];
         let mut scores: Vec<_> = considered
             .iter()
             .zip(language)
             .map(|(&index, language)| {
+                // Public fluency cannot replace a recalled word with a segmented homophone.
+                // Explicit personal evidence is added after this public prior.
+                let language =
+                    if dictionary_prior && candidates[index].source == CandidateSource::Composed {
+                        language.min(leader_language)
+                    } else {
+                        language
+                    };
                 // Composed beam scores contain segmentation costs, not word-frequency evidence.
                 let dictionary = if dictionary_prior {
                     -STATIC_GAP_PENALTY * (candidates[0].score - candidates[index].score).max(0.0)
@@ -339,6 +348,62 @@ mod tests {
                 serde_json::to_value(personal).unwrap()
             );
         }
+    }
+
+    #[test]
+    fn public_fluency_cannot_promote_a_composition_over_a_recalled_word() {
+        let mut model = model();
+        let mut candidates = [
+            candidate("现", 4, CandidateSource::ExactDictionary),
+            candidate("西安", 4, CandidateSource::Composed),
+        ];
+        let raw = model.language_scores("我去", &["现", "西安"]).unwrap();
+        assert!(raw[1] > raw[0] + PROMOTION_MARGIN);
+        for source in [CandidateSource::ExactDictionary, CandidateSource::User] {
+            candidates[0].source = source;
+            let mut session = snapshot("xian", "我去", &candidates);
+            assert_eq!(model.promotion(&session).unwrap(), None);
+            session.learning = Some(Arc::new(Learning::new(true)));
+            let result = model.explain_promotion(&session).unwrap();
+            assert_eq!(result.index, None);
+            assert_eq!(result.scores[1].language, raw[0]);
+            assert_eq!(result.prior_scale, 1.0);
+        }
+        candidates[0].source = CandidateSource::ExactDictionary;
+        candidates[1].source = CandidateSource::ExactDictionary;
+        assert_eq!(
+            model
+                .promotion(&snapshot("xian", "我去", &candidates))
+                .unwrap(),
+            Some(1)
+        );
+        candidates[0].source = CandidateSource::Composed;
+        candidates[1].source = CandidateSource::Composed;
+        assert_eq!(
+            model
+                .promotion(&snapshot("xian", "我去", &candidates))
+                .unwrap(),
+            Some(1)
+        );
+        candidates[0].source = CandidateSource::ExactDictionary;
+        candidates[1].score = 0.5;
+        let result = model
+            .explain_promotion(&snapshot("xian", "我去", &candidates))
+            .unwrap();
+        assert_eq!(result.index, None);
+        assert_eq!(result.scores[1].language, raw[0]);
+        assert_eq!(result.scores[1].dictionary, -1.0);
+
+        let learning = Arc::new(Learning::new(true));
+        for _ in 0..4 {
+            assert!(learning.record_choice("xian", "我去", &candidates, 1));
+        }
+        let mut session = snapshot("xian", "我去", &candidates);
+        session.learning = Some(learning);
+        let learned = model.explain_promotion(&session).unwrap();
+        assert_eq!(learned.scores[1].language, raw[0]);
+        assert!(learned.scores[1].personal > 0.0);
+        assert_eq!(learned.index, Some(1));
     }
 
     #[test]

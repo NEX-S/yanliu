@@ -162,6 +162,53 @@ fn explicit_contextual_choices_change_real_session_order_and_survive_restart() {
 }
 
 #[test]
+fn explicit_choices_override_composed_public_protection_and_survive_restart() {
+    let directory = StateDirectory::new();
+    let decoder = Arc::new(Decoder::new(
+        Dictionary::from_rime_reader(Cursor::new(
+            "...\n现\txian\t1000\n西\txi\t100\n安\tan\t100\n",
+        ))
+        .unwrap(),
+    ));
+    let mut model = model();
+    let mut writer = directory.writer(true);
+    let mut session = promoted_session(&decoder, &writer.learning, &mut model, "xian", "我去");
+    assert_eq!(session.candidates()[0].text, "现");
+    assert_eq!(
+        session.candidates()[0].source,
+        CandidateSource::ExactDictionary
+    );
+    assert_eq!(
+        session
+            .candidates()
+            .iter()
+            .find(|candidate| candidate.text == "西安")
+            .unwrap()
+            .source,
+        CandidateSource::Composed
+    );
+    choose(&mut session, "西安", 4);
+    session = promoted_session(&decoder, &writer.learning, &mut model, "xian", "我去");
+    assert_eq!(session.candidates()[0].text, "西安");
+    assert_eq!(session.candidates()[0].source, CandidateSource::User);
+    let learned_menu = menu(&session);
+    writer.finish().unwrap();
+    let saved = directory.snapshot();
+    assert_eq!(
+        saved["rows"],
+        serde_json::json!([{"input": "xian", "text": "西安", "count": 1}])
+    );
+    assert!(saved["updates"].as_u64().unwrap() > 0);
+
+    let mut writer = directory.writer(true);
+    let session = promoted_session(&decoder, &writer.learning, &mut model, "xian", "我去");
+    assert_eq!(session.candidates()[0].text, "西安");
+    assert_eq!(menu(&session), learned_menu);
+    writer.finish().unwrap();
+    assert_eq!(directory.snapshot(), saved);
+}
+
+#[test]
 fn partial_choice_learns_consumed_bytes_while_raw_and_completion_do_not_train() {
     let directory = StateDirectory::new();
     let decoder = decoder();
