@@ -58,6 +58,8 @@ target/release/yanliu --model data/models/sentence-model.safetensors \
 
 状态目录和报告都必须不存在，父目录须已存在；两者拒绝使用系统学习目录或其内部路径。命令不会读取桌面选词记录。回放固定开启语境学习，模拟系统配置 `contextual_learning: true` 的路径；普通次数学习也同时生效。默认配置关闭语境学习，不能用此回放结果推断它已在桌面启用。
 
+个人上下文偏好只应用于明确选过的原始拼音，同一拼音在新前文中仍可调整；大小写和单引号分别记忆。其他拼音继续使用基础模型，已有的个人词条召回、部分选词和次数偏好照常生效。
+
 报告保留每次选择前后的候选身份、消费字节和剩余拼音，以及语言、词库、个人参数与次数的评分贡献。结束时 flush 并重新加载，比较完整候选与评分、快照字节；`reload_preserved_rankings` 和 `reload_preserved_snapshot` 表示结果。`promotion.index`、`promotion.order` 和评分项的 `index` 都引用排序前的 0 基候选下标，`order` 按总分列出已评分项；Session 保留首选门槛及受保护槽位后应用尾部顺序。`before_rank` 为 1 基名次。诊断报告含本次显式提供的明文前文，公开前需自行检查内容。
 
 ## CLI 评估

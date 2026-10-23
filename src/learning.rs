@@ -172,6 +172,15 @@ impl Learning {
         let Some(adapter) = &state.adapter else {
             return vec![0.0; rows.len()];
         };
+        // Shared features must not transfer corrections to unconfirmed raw pinyin.
+        if !state
+            .counts
+            .range((input.to_owned(), String::new())..)
+            .next()
+            .is_some_and(|((raw, _), _)| raw == input)
+        {
+            return vec![0.0; rows.len()];
+        }
         rows.iter()
             .map(|row| {
                 row.iter()
@@ -727,6 +736,32 @@ mod tests {
         assert_eq!(cleared["rows"], serde_json::json!([]));
         assert_eq!(cleared["context_model"]["parameters"], 0);
         fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn contextual_scores_require_the_confirmed_raw_input_but_not_the_chosen_text() {
+        let learning = Learning::new(true);
+        let menu = [candidate("现", 4), candidate("西安", 4)];
+        assert!(learning.record_choice("xian", "我去", &menu, 1));
+        let transferred = learning.personal_scores("xian", "乘火车前往", &menu);
+        assert!(transferred[1] > transferred[0], "{transferred:?}");
+
+        let other_candidates = [candidate("现", 4), candidate("仙", 4)];
+        assert!(
+            learning
+                .personal_scores("xian", "我去", &other_candidates)
+                .iter()
+                .any(|score| *score != 0.0),
+            "a shortlist without 西安 must still use the confirmed raw input"
+        );
+        for input in ["XIAN", "Xian", "xi'an", "xian'", "xianhao", "ni"] {
+            let candidates = [candidate("现", input.len()), candidate("西安", input.len())];
+            assert_eq!(
+                learning.personal_scores(input, "我去", &candidates),
+                vec![0.0, 0.0],
+                "unconfirmed raw input {input} received contextual scores"
+            );
+        }
     }
 
     #[test]

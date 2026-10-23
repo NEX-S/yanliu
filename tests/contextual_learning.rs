@@ -230,6 +230,63 @@ fn explicit_composed_choices_learn_and_survive_restart() {
 }
 
 #[test]
+fn contextual_choice_preserves_unconfirmed_inputs_and_transfers_to_new_context() {
+    let directory = StateDirectory::new();
+    let decoder = decoder();
+    let mut model = model();
+    let mut writer = directory.writer(true);
+    let queries = [
+        ("XIAN", "此时此刻"),
+        ("xi'an", "乘火车前往"),
+        ("ni", "道路上的"),
+    ];
+    let before: Vec<_> = queries
+        .iter()
+        .map(|(input, context)| {
+            refined_session(&decoder, &writer.learning, &mut model, input, context)
+                .candidates()
+                .to_vec()
+        })
+        .collect();
+    let mut session = Session::new(decoder.clone(), Some(writer.learning.clone()));
+    session.set_context("我去");
+    session.insert("xian").unwrap();
+    assert_eq!(session.candidates()[0].text, "现");
+    choose(&mut session, "西安", 4);
+
+    let mut scored_inputs = 0;
+    for ((input, context), expected) in queries.into_iter().zip(before) {
+        let mut session = Session::new(decoder.clone(), Some(writer.learning.clone()));
+        session.set_context(context);
+        session.insert(input).unwrap();
+        let mut snapshot = session.snapshot();
+        let promotion = model
+            .refine(&mut snapshot, &decoder, || true)
+            .unwrap()
+            .unwrap();
+        scored_inputs += usize::from(!promotion.scores.is_empty());
+        assert!(
+            promotion
+                .scores
+                .iter()
+                .all(|score| score.personal == 0.0 && score.count == 0),
+            "unconfirmed input {input} received contextual scores"
+        );
+        assert!(session.apply_candidates(
+            snapshot.revision,
+            snapshot.candidates,
+            promotion.index,
+            &promotion.order
+        ));
+        assert_eq!(session.candidates(), expected, "input={input}");
+    }
+    assert!(scored_inputs > 0);
+    let session = refined_session(&decoder, &writer.learning, &mut model, "xian", "乘火车前往");
+    assert_eq!(session.candidates()[0].text, "西安");
+    writer.finish().unwrap();
+}
+
+#[test]
 fn partial_choice_learns_consumed_bytes_while_raw_and_completion_do_not_train() {
     let directory = StateDirectory::new();
     let decoder = decoder();
