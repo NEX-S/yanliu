@@ -98,7 +98,12 @@ fn main() -> Result<()> {
                 let promotion = model
                     .refine(&mut snapshot, &decoder, || true)?
                     .expect("synchronous CLI inference cannot be cancelled");
-                session.apply_candidates(snapshot.revision, snapshot.candidates, promotion.index);
+                session.apply_candidates(
+                    snapshot.revision,
+                    snapshot.candidates,
+                    promotion.index,
+                    &promotion.order,
+                );
             }
             for (i, c) in session.candidates().iter().enumerate() {
                 println!(

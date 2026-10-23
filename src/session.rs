@@ -184,11 +184,7 @@ impl Session {
             false
         }
     }
-    /// Move the candidate a ranker proposed for `revision`; false when the input has changed.
-    fn apply_promotion(&mut self, revision: u64, index: usize) -> bool {
-        if revision != self.revision {
-            return false;
-        }
+    fn apply_promotion(&mut self, index: usize, source_order: &mut [usize]) {
         let preferred = &self.candidates[index];
         let raw_len = self.input.len();
         let contextual = self.learning.as_ref().is_some_and(|l| l.contextual());
@@ -202,7 +198,7 @@ impl Session {
             .any(|c| c.consumed == raw_len && c.source.is_correction())
         {
             if preferred.consumed != raw_len || protected(preferred) {
-                return true;
+                return;
             }
             let correction = preferred.source.is_correction();
             let mut slot = index;
@@ -213,27 +209,76 @@ impl Session {
                     && candidate.source.is_correction() == correction
                 {
                     self.candidates.swap(previous, slot);
+                    source_order.swap(previous, slot);
                     slot = previous;
                 }
             }
         } else {
             self.candidates[..=index].rotate_right(1);
+            source_order[..=index].rotate_right(1);
         }
-        true
     }
-    /// Apply a background result without changing input or advancing its revision.
+    /// Apply original-menu indices without changing input or advancing its revision.
+    /// The leader decision is separate from ordering the remaining scored slots.
     pub fn apply_candidates(
         &mut self,
         revision: u64,
         candidates: Vec<Candidate>,
         preferred: Option<usize>,
+        order: &[usize],
     ) -> bool {
         if revision != self.revision {
             return false;
         }
         self.candidates = candidates;
+        // Scores still address the original menu after the leader has moved.
+        let mut source_order: Vec<_> = (0..self.candidates.len()).collect();
         if let Some(index) = preferred {
-            self.apply_promotion(revision, index);
+            self.apply_promotion(index, &mut source_order);
+        }
+        if !order.is_empty() {
+            let contextual = self.learning.as_ref().is_some_and(|l| l.contextual());
+            let correction = self.candidates[0].source.is_correction();
+            let has_correction = self.candidates.iter().any(|candidate| {
+                candidate.consumed == self.input.len() && candidate.source.is_correction()
+            });
+            let mut positions = vec![0; source_order.len()];
+            for (position, &original) in source_order.iter().enumerate() {
+                positions[original] = position;
+            }
+            let mut eligible = vec![false; source_order.len()];
+            let slots: Vec<_> = self
+                .candidates
+                .iter()
+                .enumerate()
+                .filter_map(|(position, candidate)| {
+                    if position > 0
+                        && order.contains(&source_order[position])
+                        && candidate.consumed == self.input.len()
+                        && candidate.source != CandidateSource::Completion
+                        && candidate.source.is_correction() == correction
+                        && (contextual
+                            || !has_correction
+                            || candidate.source != CandidateSource::User)
+                    {
+                        eligible[source_order[position]] = true;
+                        Some(position)
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            for (target, &original) in slots
+                .into_iter()
+                .zip(order.iter().filter(|&&original| eligible[original]))
+            {
+                let current = positions[original];
+                let displaced = source_order[target];
+                self.candidates.swap(target, current);
+                source_order.swap(target, current);
+                positions[original] = target;
+                positions[displaced] = current;
+            }
         }
         true
     }
@@ -349,6 +394,127 @@ mod cache_tests {
             );
         }
     }
+
+    #[test]
+    fn scored_tail_moves_only_scored_complete_slots_and_keeps_the_leader() {
+        let mut session = Session::new(decoder(), None);
+        session.insert("ni").unwrap();
+        session.set_context("请问");
+        let mut candidates = Vec::new();
+        for (text, consumed, source) in [
+            ("你", 2, CandidateSource::ExactDictionary),
+            ("泥", 2, CandidateSource::Composed),
+            ("你好", 2, CandidateSource::Completion),
+            ("拟", 2, CandidateSource::Composed),
+            ("腻", 2, CandidateSource::ExactDictionary),
+            ("尼", 2, CandidateSource::Composed),
+            ("年", 1, CandidateSource::ExactDictionary),
+        ] {
+            candidates.push(Candidate {
+                text: text.into(),
+                consumed,
+                source,
+                score: -(candidates.len() as f32),
+            });
+        }
+        let original = candidates.clone();
+        let revision = session.revision();
+        let cursor = session.cursor();
+        // The highest score is below the existing promotion threshold, so the
+        // leader remains fixed while the remaining scored alternatives move.
+        assert!(session.apply_candidates(revision, candidates, None, &[5, 0, 3, 1]));
+        assert_eq!(
+            session
+                .candidates()
+                .iter()
+                .map(|c| c.text.as_str())
+                .collect::<Vec<_>>(),
+            ["你", "尼", "你好", "拟", "腻", "泥", "年"]
+        );
+        assert_eq!(
+            (
+                session.input(),
+                session.context(),
+                session.cursor(),
+                session.revision()
+            ),
+            ("ni", "请问", cursor, revision)
+        );
+        for candidate in session.candidates() {
+            let before = original
+                .iter()
+                .find(|before| before.text == candidate.text)
+                .unwrap();
+            assert_eq!(
+                (
+                    candidate.consumed,
+                    &candidate.source,
+                    candidate.score.to_bits()
+                ),
+                (before.consumed, &before.source, before.score.to_bits())
+            );
+        }
+        session.insert("x").unwrap();
+        let current = session.snapshot();
+        assert!(!session.apply_candidates(revision, original, Some(usize::MAX), &[usize::MAX]));
+        assert_eq!(session.candidates(), current.candidates);
+    }
+
+    #[test]
+    fn scored_tail_follows_primary_correction_and_personal_protection() {
+        for contextual in [false, true] {
+            let mut session = Session::new(decoder(), Some(Arc::new(Learning::new(contextual))));
+            session.insert("ni").unwrap();
+            let candidates: Vec<_> = [
+                ("你", 2, CandidateSource::ExactDictionary),
+                ("泥", 2, CandidateSource::Composed),
+                ("你好", 2, CandidateSource::Completion),
+                ("拟", 2, CandidateSource::Composed),
+                ("腻", 2, CandidateSource::ExactDictionary),
+                ("尼", 2, CandidateSource::Composed),
+                ("年", 1, CandidateSource::ExactDictionary),
+                (
+                    "呢",
+                    2,
+                    CandidateSource::NeighborSubstitution {
+                        at: 1,
+                        to: b'e',
+                        ends: vec![2],
+                    },
+                ),
+                ("匿", 2, CandidateSource::User),
+            ]
+            .into_iter()
+            .enumerate()
+            .map(|(index, (text, consumed, source))| Candidate {
+                text: text.into(),
+                consumed,
+                source,
+                score: -(index as f32),
+            })
+            .collect();
+            let expected = if contextual {
+                ["尼", "匿", "你好", "拟", "泥", "腻", "年", "呢", "你"]
+            } else {
+                ["尼", "拟", "你好", "泥", "你", "腻", "年", "呢", "匿"]
+            };
+            assert!(session.apply_candidates(
+                session.revision(),
+                candidates,
+                Some(5),
+                &[8, 5, 3, 1, 0]
+            ));
+            assert_eq!(
+                session
+                    .candidates()
+                    .iter()
+                    .map(|c| c.text.as_str())
+                    .collect::<Vec<_>>(),
+                expected,
+                "contextual={contextual}"
+            );
+        }
+    }
     #[test]
     fn refined_menu_preserves_existing_paths_and_learns_the_selected_conversion() {
         let learning = Arc::new(Learning::new(false));
@@ -382,7 +548,7 @@ mod cache_tests {
         );
         let revision = session.revision();
         let cursor = session.cursor();
-        assert!(session.apply_candidates(revision, snapshot.candidates, Some(included[1])));
+        assert!(session.apply_candidates(revision, snapshot.candidates, Some(included[1]), &[]));
         assert_eq!((session.input(), session.context()), ("nihao", "请先"));
         assert_eq!((session.revision(), session.cursor()), (revision, cursor));
         assert_eq!(session.select(0).as_deref(), Some("拟好"));
@@ -397,7 +563,7 @@ mod cache_tests {
         let snapshot = session.snapshot();
         session.insert("hao").unwrap();
         let current = session.snapshot();
-        assert!(!session.apply_candidates(snapshot.revision, snapshot.candidates, Some(0)));
+        assert!(!session.apply_candidates(snapshot.revision, snapshot.candidates, Some(0), &[]));
         assert_eq!(session.candidates(), current.candidates);
         assert_eq!(session.revision(), current.revision);
     }
@@ -409,7 +575,7 @@ mod cache_tests {
         assert!(session.set_context(&context));
         session.insert("ni").unwrap();
         let snapshot = session.snapshot();
-        session.apply_candidates(snapshot.revision, snapshot.candidates, Some(1));
+        session.apply_candidates(snapshot.revision, snapshot.candidates, Some(1), &[]);
         let ranked = session.snapshot();
         for same in [context.clone(), format!("忽略的旧前文{context}")] {
             assert!(!session.set_context(&same));
@@ -448,7 +614,12 @@ mod cache_tests {
         };
         let mut snapshot = session.snapshot();
         let indices = snapshot.include_candidates(&[candidate("拟好")]);
-        session.apply_candidates(snapshot.revision, snapshot.candidates, Some(indices[0]));
+        session.apply_candidates(
+            snapshot.revision,
+            snapshot.candidates,
+            Some(indices[0]),
+            &[],
+        );
         assert_eq!(session.select(0).as_deref(), Some("拟好"));
         session.insert("nihao").unwrap();
         let baseline_len = session.candidates().len();
@@ -462,10 +633,10 @@ mod cache_tests {
                     .iter()
                     .any(|c| { c.text == "拟好" && c.source == CandidateSource::User })
             );
-            assert!(!session.apply_candidates(previous.revision, previous.candidates, None));
+            assert!(!session.apply_candidates(previous.revision, previous.candidates, None, &[]));
             let mut snapshot = session.snapshot();
             snapshot.include_candidates(&[candidate(text)]);
-            assert!(session.apply_candidates(snapshot.revision, snapshot.candidates, None));
+            assert!(session.apply_candidates(snapshot.revision, snapshot.candidates, None, &[]));
             assert_eq!(session.candidates().len(), baseline_len + 1);
             assert_eq!((session.input(), session.cursor()), ("nihao", 5));
         }
@@ -564,7 +735,12 @@ mod cache_tests {
             })
             .unwrap();
         assert!(index > 0);
-        assert!(session.apply_promotion(original.revision, index));
+        assert!(session.apply_candidates(
+            original.revision,
+            session.candidates().to_vec(),
+            Some(index),
+            &[]
+        ));
         let mut expected = original.candidates.clone();
         expected[..=index].rotate_right(1);
         assert_eq!(session.candidates(), expected);
@@ -575,7 +751,12 @@ mod cache_tests {
         assert_eq!(session.input(), original.input);
         assert_eq!(session.context(), original.context);
         assert_eq!(session.cursor(), 3);
-        assert!(!session.apply_promotion(original.revision.wrapping_add(1), usize::MAX));
+        assert!(!session.apply_candidates(
+            original.revision.wrapping_add(1),
+            session.candidates().to_vec(),
+            Some(usize::MAX),
+            &[]
+        ));
         assert_eq!(session.candidates(), expected);
     }
 
@@ -584,7 +765,12 @@ mod cache_tests {
     fn current_promotion_with_invalid_index_exposes_internal_violation() {
         let mut session = Session::new(decoder(), None);
         session.insert("ni").unwrap();
-        session.apply_promotion(session.revision(), session.candidates().len());
+        session.apply_candidates(
+            session.revision(),
+            session.candidates().to_vec(),
+            Some(session.candidates().len()),
+            &[],
+        );
     }
     #[test]
     fn append_edit_selection_and_reset_match_fresh_sessions() {
@@ -597,7 +783,12 @@ mod cache_tests {
         }
         let previous = session.snapshot();
         session.set_context("上下文");
-        assert!(!session.apply_promotion(previous.revision, 0));
+        assert!(!session.apply_candidates(
+            previous.revision,
+            session.candidates().to_vec(),
+            Some(0),
+            &[]
+        ));
         session.move_cursor(-3);
         session.insert("NI").unwrap();
         assert_fresh(&session);
@@ -634,7 +825,12 @@ mod cache_tests {
         );
         let stale = session.snapshot();
         session.reset();
-        assert!(!session.apply_promotion(stale.revision, 0));
+        assert!(!session.apply_candidates(
+            stale.revision,
+            session.candidates().to_vec(),
+            Some(0),
+            &[]
+        ));
         assert!(session.candidates().is_empty());
     }
     #[test]
@@ -751,7 +947,12 @@ mod transposition_tests {
             .iter()
             .position(|c| c.text == "按" && c.consumed == 2)
             .unwrap();
-        assert!(s.apply_promotion(before.revision, correction));
+        assert!(s.apply_candidates(
+            before.revision,
+            s.candidates().to_vec(),
+            Some(correction),
+            &[]
+        ));
         let mut expected = before.candidates;
         expected.swap(2, 3);
         assert_eq!(s.candidates, expected);
@@ -762,7 +963,7 @@ mod transposition_tests {
             .iter()
             .position(|c| c.text == "安" && c.consumed == 2)
             .unwrap();
-        assert!(s.apply_promotion(s.revision(), correction));
+        assert!(s.apply_candidates(s.revision(), s.candidates().to_vec(), Some(correction), &[]));
         for learned in [false, true] {
             if learned {
                 let i = s.candidates.iter().position(|c| c.text == "安").unwrap();
@@ -772,7 +973,7 @@ mod transposition_tests {
             }
             let before = s.snapshot();
             let index = s.candidates.iter().position(|c| c.text == "拿").unwrap();
-            assert!(s.apply_promotion(before.revision, index));
+            assert!(s.apply_candidates(before.revision, s.candidates().to_vec(), Some(index), &[]));
             let mutable = |c: &Candidate| {
                 c.consumed == 2
                     && c.source != CandidateSource::User
@@ -806,7 +1007,7 @@ mod transposition_tests {
         s.insert("na").unwrap();
         let original = s.snapshot();
         s.insert("q").unwrap();
-        assert!(!s.apply_promotion(original.revision, 0));
+        assert!(!s.apply_candidates(original.revision, s.candidates().to_vec(), Some(0), &[]));
         let i = s
             .candidates
             .iter()
@@ -847,7 +1048,7 @@ mod neighbor_tests {
             })
             .unwrap();
 
-        assert!(s.apply_promotion(before.revision, i));
+        assert!(s.apply_candidates(before.revision, s.candidates().to_vec(), Some(i), &[]));
         assert_eq!(s.candidates[0].text, "拟好");
         for (old, new) in before.candidates.iter().zip(&s.candidates) {
             if old.consumed < 5
@@ -861,7 +1062,7 @@ mod neighbor_tests {
         }
         s.reset();
         s.insert("no'haoq").unwrap();
-        assert!(!s.apply_promotion(before.revision, 0));
+        assert!(!s.apply_candidates(before.revision, s.candidates().to_vec(), Some(0), &[]));
         let i = s
             .candidates
             .iter()
@@ -913,7 +1114,7 @@ mod missing_letter_tests {
             })
             .unwrap();
 
-        assert!(s.apply_promotion(before.revision, i));
+        assert!(s.apply_candidates(before.revision, s.candidates().to_vec(), Some(i), &[]));
         assert_eq!(s.candidates[0].text, "拟好");
         for (a, b) in before.candidates.iter().zip(&s.candidates) {
             if a.consumed < 4
@@ -926,7 +1127,7 @@ mod missing_letter_tests {
             }
         }
         s.insert("q").unwrap();
-        assert!(!s.apply_promotion(before.revision, 0));
+        assert!(!s.apply_candidates(before.revision, s.candidates().to_vec(), Some(0), &[]));
         let i = s
             .candidates
             .iter()
@@ -952,7 +1153,7 @@ mod missing_letter_tests {
                     && c.source != CandidateSource::Completion
             })
             .unwrap();
-        assert!(s.apply_promotion(before.revision, index));
+        assert!(s.apply_candidates(before.revision, s.candidates().to_vec(), Some(index), &[]));
         assert_eq!(s.candidates[0], before.candidates[0]);
         s.reset();
         s.insert("nihao").unwrap();
@@ -1089,7 +1290,7 @@ mod explicit_boundary_tests {
             .rposition(|c| c.consumed == 6 && c.source != CandidateSource::Completion)
             .unwrap();
         assert!(index > 0);
-        assert!(s.apply_promotion(s.revision(), index));
+        assert!(s.apply_candidates(s.revision(), s.candidates().to_vec(), Some(index), &[]));
         assert!(s.candidates().iter().any(|c| c == &before[partial]));
         let index = s
             .candidates()

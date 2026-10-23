@@ -179,7 +179,7 @@ impl RankJob {
     fn current(&self) -> bool {
         self.generation.load(Ordering::Acquire) == self.serial
     }
-    async fn publish(self, preferred: Option<usize>) -> zbus::Result<()> {
+    async fn publish(self, preferred: Option<usize>, order: &[usize]) -> zbus::Result<()> {
         let server = self.emitter.connection().object_server();
         // Only Destroy removes an engine, and it made this job stale first.
         let interface = match server.interface::<_, Engine>(self.emitter.path()).await {
@@ -189,11 +189,18 @@ impl RankJob {
         };
         let mut engine = interface.get_mut().await;
         if self.current()
-            && (preferred.is_some() || self.snapshot.candidates != engine.session.candidates())
+            && (preferred.is_some()
+                || !order
+                    .iter()
+                    .copied()
+                    .filter(|&index| index != 0)
+                    .is_sorted()
+                || self.snapshot.candidates != engine.session.candidates())
             && engine.session.apply_candidates(
                 self.snapshot.revision,
                 self.snapshot.candidates,
                 preferred,
+                order,
             )
         {
             engine.publish(&self.emitter).await?;
@@ -276,15 +283,17 @@ impl RankingWorker {
                         }
                         let generation = job.generation.clone();
                         let serial = job.serial;
-                        let preferred = match model.refine(&mut job.snapshot, &decoder, || {
+                        let promotion = match model.refine(&mut job.snapshot, &decoder, || {
                             generation.load(Ordering::Acquire) == serial
                         }) {
-                            Ok(Some(promotion)) => promotion.index,
+                            Ok(Some(promotion)) => promotion,
                             Ok(None) => continue,
                             Err(error) => return Err(format!("ranking inference failed: {error}")),
                         };
                         let path = job.emitter.path().to_owned();
-                        if let Err(error) = runtime.block_on(job.publish(preferred)) {
+                        if let Err(error) =
+                            runtime.block_on(job.publish(promotion.index, &promotion.order))
+                        {
                             return Err(format!("ranking publisher at {path}: {error}"));
                         }
                     }
@@ -1351,6 +1360,50 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn scored_tail_without_a_promotion_publishes_and_digit_selection_uses_it() {
+        let bus = TestBus::new().await;
+        let queue = Arc::default();
+        let session = Session::new(decoder("...\n你\tni\t100\n泥\tni\t90\n拟\tni\t80\n"), None);
+        let (proxy, engine) = bus.engine(&queue, 1, session).await;
+        let mut signals = proxy.receive_all_signals().await.unwrap();
+        type_text(&proxy, "ni").await;
+        barrier(&mut signals, engine.signal_emitter()).await;
+        let before = engine.get().await.session.candidates().to_vec();
+        assert_eq!(
+            before[..3]
+                .iter()
+                .map(|c| c.text.as_str())
+                .collect::<Vec<_>>(),
+            ["你", "泥", "拟"]
+        );
+        let unchanged = take_job(&queue);
+        let changed = RankJob {
+            emitter: unchanged.emitter.clone(),
+            generation: unchanged.generation.clone(),
+            serial: unchanged.serial,
+            snapshot: engine.get().await.session.snapshot(),
+        };
+        unchanged.publish(None, &[1, 0, 2]).await.unwrap();
+        assert!(
+            barrier(&mut signals, engine.signal_emitter())
+                .await
+                .is_empty()
+        );
+        changed.publish(None, &[0, 2, 1]).await.unwrap();
+        let updates = barrier(&mut signals, engine.signal_emitter()).await;
+        assert!(
+            updates
+                .iter()
+                .any(|message| member(message) == "UpdateLookupTable")
+        );
+        let mut expected = before;
+        expected.swap(1, 2);
+        assert_eq!(engine.get().await.session.candidates(), expected);
+        assert!(key(&proxy, b'2'.into()).await);
+        assert_eq!(committed(&mut signals).await, "拟");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn panel_shows_raw_input_and_only_the_current_ranking_reorders() {
         let bus = TestBus::new().await;
         let queue = Arc::default();
@@ -1371,10 +1424,10 @@ mod tests {
         );
         // The stale "n" job publishes nothing; the "ni" job promotes a full
         // conversion and leaves the partial completion in place.
-        stale.publish(Some(1)).await.unwrap();
+        stale.publish(Some(1), &[]).await.unwrap();
         let current = take_job(&queue);
         assert_eq!(current.snapshot.input, "ni");
-        current.publish(Some(1)).await.unwrap();
+        current.publish(Some(1), &[]).await.unwrap();
         assert_eq!(auxiliary(&mut signals).await, ("ni▏".into(), true));
         expected[..=1].rotate_right(1);
         assert_eq!(engine.get().await.session.candidates(), expected);
@@ -1474,7 +1527,7 @@ mod tests {
         let shown = engine.get().await.session.candidates().to_vec();
         assert!(key(&proxy, KEYSYM_DOWN).await);
         assert!(wait_lookup(&mut signals).await);
-        pending.publish(Some(1)).await.unwrap();
+        pending.publish(Some(1), &[]).await.unwrap();
         {
             let engine = engine.get().await;
             assert_eq!(engine.cursor, 1);
@@ -1544,8 +1597,8 @@ mod tests {
                 assert!(rows.iter().eq(shown.iter().map(|c| &c.text)));
             }
             // The in-flight "n" job and the queued "ni" job are both stale.
-            first.publish(Some(1)).await.unwrap();
-            take_job(&queue).publish(Some(1)).await.unwrap();
+            first.publish(Some(1), &[]).await.unwrap();
+            take_job(&queue).publish(Some(1), &[]).await.unwrap();
             {
                 let engine = engine.get().await;
                 assert_eq!(engine.cursor, final_page * PAGE_SIZE);
@@ -1759,7 +1812,7 @@ mod tests {
                 .await;
             let mut signals = proxy.receive_all_signals().await.unwrap();
             type_text(&proxy, "ni").await;
-            take_job(&queue).publish(Some(1)).await.unwrap();
+            take_job(&queue).publish(Some(1), &[]).await.unwrap();
             assert!(key(&proxy, KEYSYM_DOWN).await);
             let shown = barrier(&mut signals, engine.signal_emitter()).await;
             let before = engine.get().await.session.snapshot();
@@ -1784,7 +1837,8 @@ mod tests {
                 assert!(!engine.get_mut().await.session.apply_candidates(
                     before.revision,
                     before.candidates,
-                    Some(1)
+                    Some(1),
+                    &[]
                 ));
                 Some(take_job(&queue))
             } else {
@@ -1820,7 +1874,7 @@ mod tests {
             }
             assert_eq!(committed(&mut signals).await, expected);
             if let Some(pending) = pending {
-                pending.publish(Some(1)).await.unwrap();
+                pending.publish(Some(1), &[]).await.unwrap();
                 assert!(
                     barrier(&mut signals, engine.signal_emitter())
                         .await
@@ -1856,7 +1910,7 @@ mod tests {
             assert!(engine.session.context().is_empty());
         }
         assert_eq!(learning.revision(), 0);
-        pending.publish(Some(1)).await.unwrap();
+        pending.publish(Some(1), &[]).await.unwrap();
         let late = barrier(&mut signals, engine.signal_emitter()).await;
         assert!(late.is_empty(), "late ranking restored English composition");
     }
@@ -1971,7 +2025,7 @@ mod tests {
                     assert!(!wait_lookup(&mut signals).await);
                 }
             }
-            pending.publish(Some(1)).await.unwrap();
+            pending.publish(Some(1), &[]).await.unwrap();
             let late = barrier(&mut signals, engine.signal_emitter()).await;
             assert!(late.is_empty(), "late ranking after {action}");
         }
@@ -2045,7 +2099,12 @@ mod tests {
             .refine(&mut snapshot, &decoder, || true)
             .unwrap()
             .unwrap();
-        assert!(expected.apply_candidates(snapshot.revision, snapshot.candidates, promotion.index));
+        assert!(expected.apply_candidates(
+            snapshot.revision,
+            snapshot.candidates,
+            promotion.index,
+            &promotion.order
+        ));
         assert_eq!(expected.candidates()[0].text, "西安");
         let mut session = Session::new(decoder, Some(learning));
         session.set_context("我去");

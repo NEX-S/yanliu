@@ -1,4 +1,4 @@
-//! Bounded pinyin recall and language-model promotion.
+//! Bounded pinyin recall and language-model candidate ordering.
 use crate::{Candidate, CandidateSource, Decoder, session::SessionSnapshot};
 use chinese_ime_lm::{Reranker, SentenceModel};
 use serde::Serialize;
@@ -29,6 +29,8 @@ pub struct Promotion {
     pub prior_scale: f32,
     pub margin: f32,
     pub index: Option<usize>,
+    /// Original scoring-menu indices in descending total-score order.
+    pub order: Vec<usize>,
     pub scores: Vec<CandidateScore>,
 }
 
@@ -155,6 +157,7 @@ impl Model {
                 prior_scale: 1.0,
                 margin: PROMOTION_MARGIN,
                 index: None,
+                order: Vec::new(),
                 scores: Vec::new(),
             });
         }
@@ -237,6 +240,7 @@ impl Model {
         let margin = PROMOTION_MARGIN / prior_scale;
         Ok(Promotion {
             index: best_promotion(&scores, margin),
+            order: scored_order(&scores),
             prior_scale,
             margin,
             scores,
@@ -316,6 +320,18 @@ fn best_promotion(scores: &[CandidateScore], margin: f32) -> Option<usize> {
         }
     }
     (best != 0 && scores[best].total > scores[0].total + margin).then(|| scores[best].index)
+}
+
+fn scored_order(scores: &[CandidateScore]) -> Vec<usize> {
+    let mut sorted: Vec<_> = scores.iter().collect();
+    sorted.sort_by(|a, b| {
+        if a.total == b.total {
+            a.index.cmp(&b.index)
+        } else {
+            b.total.total_cmp(&a.total)
+        }
+    });
+    sorted.into_iter().map(|score| score.index).collect()
 }
 
 fn answers_input(input: &str, candidate: &Candidate) -> bool {
@@ -406,6 +422,29 @@ mod tests {
     }
 
     #[test]
+    fn scored_order_keeps_the_promotion_margin_and_menu_indices() {
+        let scores: Vec<_> = [(0, 0.0), (5, 0.2), (1, 0.1), (4, 0.2), (2, -0.0)]
+            .into_iter()
+            .map(|(index, total)| CandidateScore {
+                index,
+                total,
+                language: total,
+                dictionary: 0.0,
+                personal: 0.0,
+                count: 0,
+                frequency: 0.0,
+            })
+            .collect();
+        let order = scored_order(&scores);
+        assert_eq!(order, [4, 5, 1, 0, 2]);
+        assert_eq!(
+            scores.iter().map(|score| score.index).collect::<Vec<_>>(),
+            [0, 5, 1, 4, 2]
+        );
+        assert_eq!(best_promotion(&scores, PROMOTION_MARGIN), None);
+    }
+
+    #[test]
     fn empty_personal_state_preserves_base_promotions() {
         let mut model = model();
         let candidates = [
@@ -482,7 +521,12 @@ mod tests {
         );
         let index = decision.index.unwrap();
         assert_eq!(snapshot.candidates[index].text, "西安");
-        assert!(session.apply_candidates(snapshot.revision, snapshot.candidates, Some(index)));
+        assert!(session.apply_candidates(
+            snapshot.revision,
+            snapshot.candidates,
+            Some(index),
+            &decision.order
+        ));
         assert_eq!(session.candidates()[0].text, "西安");
     }
 
@@ -510,7 +554,8 @@ mod tests {
                 assert!(session.apply_candidates(
                     snapshot.revision,
                     snapshot.candidates,
-                    result.index
+                    result.index,
+                    &result.order
                 ));
                 assert_eq!(session.candidates()[0].text, "开源");
             }
@@ -545,7 +590,12 @@ mod tests {
             .refine(&mut snapshot, &decoder, || true)
             .unwrap()
             .unwrap();
-        assert!(session.apply_candidates(snapshot.revision, snapshot.candidates, result.index));
+        assert!(session.apply_candidates(
+            snapshot.revision,
+            snapshot.candidates,
+            result.index,
+            &result.order
+        ));
         assert_eq!(session.candidates()[0].text, "B站");
         assert_eq!(session.candidates()[0].source, CandidateSource::User);
     }
@@ -827,7 +877,12 @@ mod tests {
             .refine(&mut snapshot, &decoder, || true)
             .unwrap()
             .unwrap();
-        assert!(session.apply_candidates(snapshot.revision, snapshot.candidates, result.index));
+        assert!(session.apply_candidates(
+            snapshot.revision,
+            snapshot.candidates,
+            result.index,
+            &result.order
+        ));
         assert_eq!(session.candidates()[0].text, "㨎");
         assert_eq!(session.candidates()[0].source, CandidateSource::User);
     }

@@ -47,6 +47,7 @@ fn query(
         snapshot.revision,
         snapshot.candidates.clone(),
         explanation.index,
+        &explanation.order,
     );
     let candidates: Vec<_> = session.candidates().iter().map(|candidate| json!({
         "text": candidate.text, "consumed": candidate.consumed,

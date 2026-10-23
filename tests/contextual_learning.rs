@@ -94,7 +94,12 @@ fn refined_session(
         );
     }
     let before = menu(&snapshot.candidates);
-    assert!(session.apply_candidates(snapshot.revision, snapshot.candidates, promotion.index));
+    assert!(session.apply_candidates(
+        snapshot.revision,
+        snapshot.candidates,
+        promotion.index,
+        &promotion.order
+    ));
     assert_eq!(
         menu(session.candidates()),
         before,
