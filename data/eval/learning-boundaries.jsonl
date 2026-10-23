@@ -1,0 +1,35 @@
+{"id": "baseline-boundary-shizhexie", "input": "shizhexie", "context": "这项研究揭"}
+{"id": "baseline-boundary-qishiwo", "input": "qishiwo", "context": "大家都很喜欢篮球，尤"}
+{"id": "baseline-boundary-yigede", "input": "yigede", "context": "这是一座别具"}
+{"id": "baseline-boundary-quanlishi", "input": "quanlishi", "context": "他曾担任联合国安"}
+{"id": "baseline-boundary-shijian-event", "input": "shijian", "context": "单击按钮会触发一个"}
+{"id": "baseline-boundary-yibucuo", "input": "yibucuo", "context": "我觉得这个主"}
+{"id": "baseline-boundary-bianliangming", "input": "bianliangming", "context": "请先定义局部"}
+{"id": "baseline-boundary-duitou", "input": "duitou", "context": "账本里有两笔记录不"}
+{"id": "baseline-boundary-youjianwangqu", "input": "youjianwangqu", "context": "乘车经过香港的"}
+{"id": "baseline-contrast-shizhexie", "input": "shizhexie", "context": "今天要处理的就"}
+{"id": "baseline-contrast-qishiwo", "input": "qishiwo", "context": "这件事你别误会，"}
+{"id": "baseline-contrast-quanlishi", "input": "quanlishi", "context": "宪法明确规定，最高"}
+{"id": "baseline-contrast-shijian", "input": "shijian", "context": "我们还需要一些"}
+{"id": "select-boundary-shizhexie", "input": "shizhexie", "context": "这项研究揭", "select": {"text": "示这些", "consumed": 9}}
+{"id": "select-boundary-qishiwo", "input": "qishiwo", "context": "大家都很喜欢篮球，尤", "select": {"text": "其是我", "consumed": 7}}
+{"id": "select-boundary-yigede", "input": "yigede", "context": "这是一座别具", "select": {"text": "一格的", "consumed": 6}}
+{"id": "select-boundary-quanlishi", "input": "quanlishi", "context": "他曾担任联合国安", "select": {"text": "全理事", "consumed": 9}}
+{"id": "select-boundary-shijian-event", "input": "shijian", "context": "单击按钮会触发一个", "select": {"text": "事件", "consumed": 7}}
+{"id": "select-boundary-yibucuo", "input": "yibucuo", "context": "我觉得这个主", "select": {"text": "意不错", "consumed": 7}}
+{"id": "select-boundary-bianliangming", "input": "bianliangming", "context": "请先定义局部", "select": {"text": "变量名", "consumed": 13}}
+{"id": "select-boundary-duitou", "input": "duitou", "context": "账本里有两笔记录不", "select": {"text": "对头", "consumed": 6}}
+{"id": "select-boundary-youjianwangqu", "input": "youjianwangqu", "context": "乘车经过香港的", "select": {"text": "油尖旺区", "consumed": 13}}
+{"id": "query-boundary-shizhexie", "input": "shizhexie", "context": "这项研究揭"}
+{"id": "query-boundary-qishiwo", "input": "qishiwo", "context": "大家都很喜欢篮球，尤"}
+{"id": "query-boundary-yigede", "input": "yigede", "context": "这是一座别具"}
+{"id": "query-boundary-quanlishi", "input": "quanlishi", "context": "他曾担任联合国安"}
+{"id": "query-boundary-shijian-event", "input": "shijian", "context": "单击按钮会触发一个"}
+{"id": "query-boundary-yibucuo", "input": "yibucuo", "context": "我觉得这个主"}
+{"id": "query-boundary-bianliangming", "input": "bianliangming", "context": "请先定义局部"}
+{"id": "query-boundary-duitou", "input": "duitou", "context": "账本里有两笔记录不"}
+{"id": "query-boundary-youjianwangqu", "input": "youjianwangqu", "context": "乘车经过香港的"}
+{"id": "query-contrast-shizhexie", "input": "shizhexie", "context": "今天要处理的就"}
+{"id": "query-contrast-qishiwo", "input": "qishiwo", "context": "这件事你别误会，"}
+{"id": "query-contrast-quanlishi", "input": "quanlishi", "context": "宪法明确规定，最高"}
+{"id": "query-contrast-shijian", "input": "shijian", "context": "我们还需要一些"}

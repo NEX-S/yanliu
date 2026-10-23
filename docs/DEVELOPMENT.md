@@ -54,6 +54,8 @@ target/release/yanliu --model data/models/sentence-model.safetensors \
 
 将 `--data` 改为 `data/eval/learning-readings.jsonl`，可以用完整词库回放“什锦”等非首选的纠正，并检查用品语境仍优先“湿巾”；每次回放使用新的状态目录和报告路径。
 
+`data/eval/learning-boundaries.jsonl` 则检查词中间提交的纠正，例如“尤／其是我”“安／全理事”。它先查询全部前文，再各选词一次，最后查询原前文及同拼音的不同前文，便于区分“记住了这次选择”和“把所有前文都改成同一个词”。这些文件是固定开发诊断，不保证其他模型在相同次数内学会。
+
 状态目录和报告都必须不存在，父目录须已存在；两者拒绝使用系统学习目录或其内部路径。命令不会读取桌面选词记录。回放固定开启语境学习，模拟系统配置 `contextual_learning: true` 的路径；普通次数学习也同时生效。默认配置关闭语境学习，不能用此回放结果推断它已在桌面启用。
 
 报告保留每次选择前后的候选身份、消费字节和剩余拼音，以及语言、词库、个人参数与次数的评分贡献。结束时 flush 并重新加载，比较完整候选与评分、快照字节；`reload_preserved_rankings` 和 `reload_preserved_snapshot` 表示结果。`promotion.index`、评分项的 `index` 为提升前的 0 基候选下标，`before_rank` 为 1 基名次。诊断报告含本次显式提供的明文前文，公开前需自行检查内容。
