@@ -167,6 +167,41 @@ class LearningReplayTests(unittest.TestCase):
         self.assertFalse((self.state / 'learning.json').exists())
         self.assertTrue(json.loads(self.output.read_text())['reload_preserved_rankings'])
 
+    def test_segmented_choices_remember_the_complete_phrase_and_reload(self):
+        result = self.run_replay([
+            {'id': 'three-parts', 'input': "Ni'HaoNi", 'selects': [
+                {'text': '泥', 'consumed': 3}, {'text': '好', 'consumed': 3},
+                {'text': '你', 'consumed': 2}]},
+            {'id': 'legacy', 'input': 'xian', 'select': {'text': '现', 'consumed': 4}},
+        ])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        report = json.loads(self.output.read_text())
+        self.assertIsNone(report['rows'][0]['selection'])
+        self.assertEqual(report['rows'][0]['selections'], [
+            {'text': '泥', 'consumed': 3, 'remaining_input': 'HaoNi'},
+            {'text': '好', 'consumed': 3, 'remaining_input': 'Ni'},
+            {'text': '你', 'consumed': 2, 'remaining_input': ''},
+        ])
+        self.assertEqual(report['rows'][1]['selection'],
+                         {'text': '现', 'consumed': 4, 'remaining_input': ''})
+        self.assertNotIn('selections', report['rows'][1])
+        for query in (report['rows'][0]['after'], report['reloaded'][0]['result']):
+            self.assertEqual(query['candidates'][0]['text'], '泥好你')
+            self.assertEqual(query['candidates'][0]['consumed'], 8)
+            self.assertEqual(query['candidates'][0]['source'], 'User')
+        self.assertTrue(report['reload_preserved_snapshot'])
+        self.assertTrue(report['reload_preserved_rankings'])
+        snapshot = json.loads((self.state / 'learning.json').read_text())
+        self.assertEqual(sorted((r['input'], r['text'], r['count']) for r in snapshot['rows']),
+                         sorted([("Ni'", '泥', 1), ('Hao', '好', 1), ('Ni', '你', 1),
+                                 ("Ni'HaoNi", '泥好你', 1), ('xian', '现', 1)]))
+
+    def test_segmented_choice_failure_reports_the_actual_step(self):
+        result = self.run_replay([{'id': 'bad-second', 'input': "ni'hao", 'selects': [
+            {'text': '你', 'consumed': 3}, {'text': '不存在', 'consumed': 3}]}])
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('bad-second: selection step 2: selected candidate not recalled', result.stderr)
+
     def test_refuses_existing_state_or_report_and_never_reads_system_state(self):
         cases = [{'id': 'query', 'input': 'xian'}]
         self.state.mkdir()
@@ -209,6 +244,11 @@ class LearningReplayTests(unittest.TestCase):
             {'id': 'bad-pinyin', 'input': 'xian1'},
             {'id': 'bad-consumed', 'input': 'xian', 'select': {'text': '现', 'consumed': 5}},
             {'id': 'unknown-field', 'input': 'xian', 'action': 'erase'},
+            {'id': 'exclusive', 'input': 'xian', 'select': {'text': '现', 'consumed': 4},
+             'selects': [{'text': '现', 'consumed': 4}]},
+            {'id': 'empty-chain', 'input': 'xian', 'selects': []},
+            {'id': 'bad-second-length', 'input': "ni'hao", 'selects': [
+                {'text': '你', 'consumed': 3}, {'text': '好', 'consumed': 4}]},
         ]:
             with self.subTest(case=case):
                 result = self.run_replay([case])

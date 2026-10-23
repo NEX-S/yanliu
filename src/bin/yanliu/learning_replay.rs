@@ -26,19 +26,14 @@ struct Case {
     #[serde(default)]
     context: String,
     select: Option<Selection>,
+    selects: Option<Vec<Selection>>,
 }
 
-fn query(
-    case: &Case,
+fn refine(
+    session: &mut Session,
     decoder: &Arc<Decoder>,
-    writer: &LearningWriter,
     model: &mut Model,
-) -> super::Result<(Session, Value)> {
-    let mut session = Session::new(decoder.clone(), Some(writer.learning.clone()));
-    session.set_context(&case.context);
-    for character in case.input.chars() {
-        session.insert(&character.to_string())?;
-    }
+) -> super::Result<Value> {
     let mut snapshot = session.snapshot();
     let explanation = model
         .refine(&mut snapshot, decoder, || true)?
@@ -54,10 +49,22 @@ fn query(
         "source": format!("{:?}", candidate.source), "score_bits": candidate.score.to_bits(),
         "before_rank": snapshot.candidates.iter().position(|c| c == candidate).unwrap() + 1,
     })).collect();
-    Ok((
-        session,
-        json!({"candidates": candidates, "promotion": explanation}),
-    ))
+    Ok(json!({"candidates": candidates, "promotion": explanation}))
+}
+
+fn query(
+    case: &Case,
+    decoder: &Arc<Decoder>,
+    writer: &LearningWriter,
+    model: &mut Model,
+) -> super::Result<(Session, Value)> {
+    let mut session = Session::new(decoder.clone(), Some(writer.learning.clone()));
+    session.set_context(&case.context);
+    for character in case.input.chars() {
+        session.insert(&character.to_string())?;
+    }
+    let result = refine(&mut session, decoder, model)?;
+    Ok((session, result))
 }
 
 pub fn run(
@@ -79,9 +86,6 @@ pub fn run(
                 .input
                 .bytes()
                 .all(|b| b.is_ascii_alphabetic() || b == b'\'')
-            || case.select.as_ref().is_some_and(|s| {
-                s.text.is_empty() || s.consumed == 0 || s.consumed > case.input.len()
-            })
         {
             return Err(format!(
                 "{}:{}: nonempty unique id, ASCII pinyin and valid selection required",
@@ -89,6 +93,29 @@ pub fn run(
                 index + 1
             )
             .into());
+        }
+        if case.select.is_some() && case.selects.is_some() {
+            return Err(format!("{}: select and selects are mutually exclusive", case.id).into());
+        }
+        if case.selects.as_ref().is_some_and(Vec::is_empty) {
+            return Err(format!("{}: selects must not be empty", case.id).into());
+        }
+        let choices = case
+            .selects
+            .as_deref()
+            .or_else(|| case.select.as_ref().map(std::slice::from_ref))
+            .unwrap_or_default();
+        let mut remaining = case.input.len();
+        for (step, choice) in choices.iter().enumerate() {
+            if choice.text.is_empty() || choice.consumed == 0 || choice.consumed > remaining {
+                return Err(format!(
+                    "{}: selection step {} has invalid text or consumed bytes",
+                    case.id,
+                    step + 1
+                )
+                .into());
+            }
+            remaining -= choice.consumed;
         }
         cases.push(case);
     }
@@ -154,28 +181,56 @@ pub fn run(
     let mut rows = Vec::new();
     for case in &cases {
         let (mut session, before) = query(case, decoder, &writer, &mut model)?;
-        let selection = if let Some(selection) = &case.select {
+        let choices = case
+            .selects
+            .as_deref()
+            .or_else(|| case.select.as_ref().map(std::slice::from_ref))
+            .unwrap_or_default();
+        let mut selections = Vec::new();
+        for (step, selection) in choices.iter().enumerate() {
             let index = session
                 .candidates()
                 .iter()
                 .position(|candidate| {
                     candidate.text == selection.text && candidate.consumed == selection.consumed
                 })
-                .ok_or_else(|| format!("{}: selected candidate not recalled", case.id))?;
-            let committed = session
-                .select(index)
-                .ok_or("learning writer stopped before selection")?;
-            Some(
+                .ok_or_else(|| {
+                    if case.selects.is_some() {
+                        format!(
+                            "{}: selection step {}: selected candidate not recalled",
+                            case.id,
+                            step + 1
+                        )
+                    } else {
+                        format!("{}: selected candidate not recalled", case.id)
+                    }
+                })?;
+            let committed = session.select(index).ok_or_else(|| {
+                format!(
+                    "{}: selection step {}: learning writer stopped before selection",
+                    case.id,
+                    step + 1
+                )
+            })?;
+            selections.push(
                 json!({"text": committed, "consumed": selection.consumed, "remaining_input": session.input()}),
-            )
+            );
+            if step + 1 < choices.len() {
+                refine(&mut session, decoder, &mut model)?;
+            }
+        }
+        let selection = if case.select.is_some() {
+            selections.pop()
         } else {
             None
         };
         let (_, after) = query(case, decoder, &writer, &mut model)?;
-        rows.push(
-            json!({"id": case.id, "input": case.input, "context": case.context,
-                         "before": before, "selection": selection, "after": after}),
-        );
+        let mut row = json!({"id": case.id, "input": case.input, "context": case.context,
+                            "before": before, "selection": selection, "after": after});
+        if case.selects.is_some() {
+            row["selections"] = json!(selections);
+        }
+        rows.push(row);
     }
     let mut seen = BTreeSet::new();
     let mut final_queries = Vec::new();

@@ -45,6 +45,24 @@ struct State {
     stopped: bool,
 }
 
+impl State {
+    fn record_count(&mut self, input: &str, text: &str) {
+        let key = (input.to_owned(), text.to_owned());
+        if !self.counts.contains_key(&key) && self.counts.len() == MAX_ROWS {
+            // Evict the least chosen row; the smallest key breaks ties deterministically.
+            let victim = self
+                .counts
+                .iter()
+                .min_by_key(|(key, count)| (**count, *key))
+                .map(|(key, _)| key.clone())
+                .expect("full table is nonempty");
+            self.counts.remove(&victim);
+        }
+        let count = self.counts.entry(key).or_default();
+        *count = count.saturating_add(1);
+    }
+}
+
 /// Preferences shared by every session; `contextual` applies and updates the personal parameters.
 pub struct Learning {
     contextual: bool,
@@ -212,6 +230,7 @@ impl Learning {
         context: &str,
         candidates: &[Candidate],
         selected: usize,
+        joined: Option<(&str, &str)>,
     ) -> bool {
         let chosen = &candidates[selected];
         if chosen.source == CandidateSource::Completion {
@@ -250,19 +269,10 @@ impl Learning {
         if state.stopped {
             return false;
         }
-        let key = (raw.to_owned(), chosen.text.clone());
-        if !state.counts.contains_key(&key) && state.counts.len() == MAX_ROWS {
-            // Evict the least chosen row; the smallest key breaks ties deterministically.
-            let victim = state
-                .counts
-                .iter()
-                .min_by_key(|(key, count)| (**count, *key))
-                .map(|(key, _)| key.clone())
-                .expect("full table is nonempty");
-            state.counts.remove(&victim);
+        state.record_count(raw, &chosen.text);
+        if let Some((raw, text)) = joined {
+            state.record_count(raw, text);
         }
-        let count = state.counts.entry(key).or_default();
-        *count = count.saturating_add(1);
         if let Some(change) = change {
             let adapter = state.adapter.get_or_insert_with(|| vec![0.0; FEATURES]);
             for (weight, change) in adapter.iter_mut().zip(change) {
@@ -695,11 +705,15 @@ mod tests {
         let menu = [candidate("现", 4), candidate("西安", 4)];
         let reversed = [menu[1].clone(), menu[0].clone()];
         let mut writer = LearningWriter::start(&dir, true, |_| {}).unwrap();
-        assert!(writer.learning.record_choice("xian", "我去", &menu, 1));
         assert!(
             writer
                 .learning
-                .record_choice("xian", "此时此刻", &reversed, 1)
+                .record_choice("xian", "我去", &menu, 1, None)
+        );
+        assert!(
+            writer
+                .learning
+                .record_choice("xian", "此时此刻", &reversed, 1, None)
         );
         let travel = writer.learning.personal_scores("xian", "我去", &menu);
         let now = writer.learning.personal_scores("xian", "此时此刻", &menu);
@@ -740,7 +754,11 @@ mod tests {
         // Without contextual learning the stored parameters are kept but never updated.
         let mut writer = LearningWriter::start(&dir, false, |_| {}).unwrap();
         assert!(!writer.learning.contextual());
-        assert!(writer.learning.record_choice("xian", "我去", &menu, 1));
+        assert!(
+            writer
+                .learning
+                .record_choice("xian", "我去", &menu, 1, None)
+        );
         writer.finish().unwrap();
         let summary = list(&dir).unwrap();
         assert_eq!(summary["context_model"]["updates"], 2);
@@ -756,7 +774,7 @@ mod tests {
     fn contextual_scores_require_the_confirmed_raw_input_but_not_the_chosen_text() {
         let learning = Learning::new(true);
         let menu = [candidate("现", 4), candidate("西安", 4)];
-        assert!(learning.record_choice("xian", "我去", &menu, 1));
+        assert!(learning.record_choice("xian", "我去", &menu, 1, None));
         let transferred = learning.personal_scores("xian", "乘火车前往", &menu);
         assert!(transferred[1] > transferred[0], "{transferred:?}");
 
@@ -795,15 +813,34 @@ mod tests {
             candidate("你", 3),
             candidate("泥", 3),
         ];
-        assert!(learning.record_choice("ni'hao", "外部前文", &menu, 3));
+        assert!(learning.record_choice("ni'hao", "外部前文", &menu, 3, None));
         assert_eq!(learning.lock().updates, 0);
         assert_eq!(count(&learning, "ni'", "你"), Some(1));
         assert!(learning.lock().adapter.is_none());
-        assert!(learning.record_choice("ni'hao", "外部前文", &menu, 4));
+        assert!(learning.record_choice("ni'hao", "外部前文", &menu, 4, None));
         assert_eq!(learning.lock().updates, 1);
-        assert!(learning.record_choice("ni'hao", "外部前文", &menu, 0));
+        assert!(learning.record_choice("ni'hao", "外部前文", &menu, 0, None));
         assert_eq!(learning.lock().updates, 1);
         assert_eq!(learning.revision(), 2);
+    }
+
+    #[test]
+    fn joined_choice_adds_only_a_count_without_a_virtual_contextual_update() {
+        let ordinary = Learning::new(true);
+        let joined = Learning::new(true);
+        let menu = [candidate("号", 3), candidate("好", 3)];
+        assert!(ordinary.record_choice("hao", "你", &menu, 1, None));
+        assert!(joined.record_choice("hao", "你", &menu, 1, Some(("nihao", "你好"))));
+        let a = ordinary.lock();
+        let b = joined.lock();
+        assert_eq!(a.adapter, b.adapter);
+        assert_eq!(a.updates, 1);
+        assert_eq!(a.updates, b.updates);
+        assert_eq!(a.revision, b.revision);
+        assert_eq!(a.counts.get(&("hao".into(), "好".into())), Some(&1));
+        assert_eq!(b.counts.get(&("hao".into(), "好".into())), Some(&1));
+        assert!(!a.counts.contains_key(&("nihao".into(), "你好".into())));
+        assert_eq!(b.counts.get(&("nihao".into(), "你好".into())), Some(&1));
     }
 
     #[test]
@@ -950,7 +987,7 @@ mod tests {
         assert!(
             writer
                 .learning
-                .record_choice("ni", "", &[candidate("你", 2)], 0)
+                .record_choice("ni", "", &[candidate("你", 2)], 0, None)
         );
         let error = clear(&dir).unwrap_err().to_string();
         assert!(error.contains("stop yanliu-ibus and retry"), "{error}");
@@ -974,7 +1011,7 @@ mod tests {
         assert!(
             writer
                 .learning
-                .record_choice("ni", "", &[candidate("泥", 2)], 0)
+                .record_choice("ni", "", &[candidate("泥", 2)], 0, None)
         );
         writer.finish().unwrap();
         assert_eq!(list(&dir).unwrap()["rows"][0]["text"], "泥");
@@ -1016,7 +1053,7 @@ mod tests {
         assert!(
             writer
                 .learning
-                .record_choice("ni", "", &[candidate("你", 2)], 0)
+                .record_choice("ni", "", &[candidate("你", 2)], 0, None)
         );
         writer.finish().unwrap();
         let previous = fs::read(&path).unwrap();
@@ -1031,7 +1068,7 @@ mod tests {
         assert!(
             writer
                 .learning
-                .record_choice("ni", "", &[candidate("泥", 2)], 0)
+                .record_choice("ni", "", &[candidate("泥", 2)], 0, None)
         );
         let cause = rx.recv_timeout(Duration::from_secs(2)).unwrap();
         assert!(
@@ -1042,7 +1079,7 @@ mod tests {
         assert!(
             !writer
                 .learning
-                .record_choice("ni", "", &[candidate("泥", 2)], 0)
+                .record_choice("ni", "", &[candidate("泥", 2)], 0, None)
         );
         assert!(writer.finish().is_err());
         assert_eq!(fs::read(&path).unwrap(), previous);
@@ -1064,6 +1101,38 @@ mod tests {
     }
 
     #[test]
+    fn stopped_writer_rejects_the_last_segment_without_recording_a_joined_choice() {
+        let dir = directory();
+        let mut writer = LearningWriter::start(&dir, false, |_| {}).unwrap();
+        let mut session = Session::new(
+            decoder("你\tni\t100\n好\thao\t100\n"),
+            Some(writer.learning.clone()),
+        );
+        session.insert("nihao").unwrap();
+        let index = session
+            .candidates()
+            .iter()
+            .position(|c| c.text == "你" && c.consumed == 2)
+            .unwrap();
+        assert_eq!(session.select(index).as_deref(), Some("你"));
+        writer.finish().unwrap();
+        let before = session.snapshot();
+        let index = session
+            .candidates()
+            .iter()
+            .position(|c| c.text == "好" && c.consumed == 3)
+            .unwrap();
+        assert!(session.select(index).is_none());
+        assert_eq!(session.input(), before.input);
+        assert_eq!(session.context(), before.context);
+        assert_eq!(session.revision(), before.revision);
+        assert_eq!(count(&writer.learning, "ni", "你"), Some(1));
+        assert_eq!(count(&writer.learning, "hao", "好"), None);
+        assert_eq!(count(&writer.learning, "nihao", "你好"), None);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn raw_commit_and_external_context_do_not_learn() {
         let learning = Arc::new(Learning::new(true));
         let mut session = Session::new(decoder("你\tni\t100\n"), Some(learning.clone()));
@@ -1077,7 +1146,7 @@ mod tests {
     fn bounded_table_evicts_deterministically_and_saturates_counts() {
         let learning = Learning::new(false);
         let choose =
-            |text: &str| assert!(learning.record_choice("ni", "", &[candidate(text, 2)], 0));
+            |text: &str| assert!(learning.record_choice("ni", "", &[candidate(text, 2)], 0, None));
         for index in 0..MAX_ROWS {
             choose(&format!("词{index:04}"));
         }
@@ -1101,11 +1170,11 @@ mod tests {
         for index in 0..16 {
             let text = format!("词{index:02}");
             for _ in 0..index + 1 {
-                assert!(learning.record_choice("ni", "", &[candidate(&text, 2)], 0));
+                assert!(learning.record_choice("ni", "", &[candidate(&text, 2)], 0, None));
             }
         }
-        assert!(learning.record_choice("ni'", "", &[candidate("边界", 3)], 0));
-        assert!(learning.record_choice("ni'hao", "", &[candidate("完整", 6)], 0));
+        assert!(learning.record_choice("ni'", "", &[candidate("边界", 3)], 0, None));
+        assert!(learning.record_choice("ni'hao", "", &[candidate("完整", 6)], 0, None));
         let recalled = learning.recall("ni'hao", &[]);
         assert_eq!(recalled.len(), RECALL_LIMIT);
         assert_eq!(recalled[0].text, "完整");

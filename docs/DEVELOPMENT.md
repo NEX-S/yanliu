@@ -34,6 +34,8 @@ IBus 的异步运行时只开一个 worker；模型计算和学习持久化各�
 
 默认偏好最多保存 4,096 对实际消费的拼音、所选文本和次数。明确选择后先更新内存，独立持久线程约每 250 ms 合并突发更新，以原子替换保存快照；正常退出时 flush。Enter 提交的原文、Completion 未输入的部分和敏感字段不参与学习。
 
+同一 Session 连续选择非补全的部分候选时，临时累计已消费的原始拼音和所选文本；选空余串后，除本段记录外再将完整组合记一次。单次完整选择不重复计数。增删原始拼音、有效外部前文改变、Enter、重置和 Completion 结束组合；相同有效前文回调、拼音光标移动、候选导航及模型重排保留组合。临时组合不进入后台快照或持久文件；关闭学习时不收集。完整组合只更新次数，不构造虚拟候选或额外训练个人参数。
+
 Session 刷新时从已有内存计数中补充至多 8 条个人候选，来源为 User；与词库已有的文本及消费范围重合时保留词库候选，包括 Completion 身份。完整消费的普通转换与个人词条先于补全和纠错，使真实转换能够进入模型评分；只有补全与纠错时，保留二者原有静态次序。其后仍按显式分隔前缀、其他前缀分组，同组优先消费更多拼音，再按次数及静态分数排序，不增加持久索引或逐键磁盘读取。
 
 `contextual_learning` 默认关闭。开启后，用有限前文和真实候选的纠正更新 4,096 维本地条件参数，与次数保存在同一快照中。不保存明文前文或候选日志；参数本身仍按私人数据管理。
@@ -42,10 +44,11 @@ Session 刷新时从已有内存计数中补充至多 8 条个人候选，来源
 
 ### 回放个人学习
 
-`learning replay` 在全新的隔离目录中重放公开选词，使用真实 Session 和持久化路径。每行含唯一 `id`、`input`、可选 `context`，需要纠正时提供明确的 `select.text` 和 `select.consumed`（原始拼音字节数）；省略 `select` 只查询。
+`learning replay` 在全新的隔离目录中重放公开选词，使用真实 Session 和持久化路径。每行含唯一 `id`、`input`、可选 `context`，需要纠正时提供明确的 `select.text` 和 `select.consumed`（原始拼音字节数）。连续分段选择用非空 `selects` 数组，与 `select` 互斥；数组各步在同一 Session 的余串菜单中选择，`consumed` 相对于当步剩余输入。两者都省略时只查询。
 
 ```json
 {"id":"now-1","input":"xian","context":"此时此刻","select":{"text":"现","consumed":4}}
+{"id":"segments-1","input":"niyouyaoxideyifuma","selects":[{"text":"你有要洗的衣服","consumed":16},{"text":"吗","consumed":2}]}
 ```
 
 ```sh
@@ -62,7 +65,7 @@ target/release/yanliu --model data/models/sentence-model.safetensors \
 
 个人上下文偏好只应用于明确选过的原始拼音，同一拼音在新前文中仍可调整；大小写和单引号分别记忆。其他拼音继续使用基础模型，已有的个人词条召回、部分选词和次数偏好照常生效。
 
-报告保留每次选择前后的候选身份、消费字节和剩余拼音，以及语言、词库、个人参数与次数的评分贡献。结束时 flush 并重新加载，比较完整候选与评分、快照字节；`reload_preserved_rankings` 和 `reload_preserved_snapshot` 表示结果。`promotion.index`、`promotion.order` 和评分项的 `index` 都引用排序前的 0 基候选下标，`order` 按总分列出已评分项；Session 保留首选门槛及受保护槽位后应用尾部顺序。`before_rank` 为 1 基名次。诊断报告含本次显式提供的明文前文，公开前需自行检查内容。
+报告保留每次查询前后的候选身份，以及语言、词库、个人参数与次数的评分贡献。旧 `select` 的 `selection` 字段保持原样；`selects` 对应的 `selections` 数组记录各步实际提交的文本、消费字节和剩余拼音，`after` 仍重新查询原整串。结束时 flush 并重新加载，比较完整候选与评分、快照字节；`reload_preserved_rankings` 和 `reload_preserved_snapshot` 表示结果。`promotion.index`、`promotion.order` 和评分项的 `index` 都引用排序前的 0 基候选下标，`order` 按总分列出已评分项；Session 保留首选门槛及受保护槽位后应用尾部顺序。`before_rank` 为 1 基名次。诊断报告含本次显式提供的明文前文，公开前需自行检查内容。
 
 ## CLI 评估
 

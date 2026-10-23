@@ -63,6 +63,7 @@ pub struct Session {
     revision: u64,
     candidates: Vec<Candidate>,
     context: String,
+    pending_selection: Option<(String, String)>,
 }
 
 impl Session {
@@ -77,6 +78,7 @@ impl Session {
             revision: 0,
             candidates: Vec::new(),
             context: String::new(),
+            pending_selection: None,
         }
     }
     pub fn input(&self) -> &str {
@@ -112,6 +114,7 @@ impl Session {
             return Err(format!("input exceeds {MAX_INPUT_BYTES} bytes"));
         }
         if !text.is_empty() {
+            self.pending_selection = None;
             self.input.insert_str(self.cursor, text);
             self.cursor += text.len();
             self.refresh();
@@ -123,6 +126,7 @@ impl Session {
             return false;
         }
         self.cursor -= 1;
+        self.pending_selection = None;
         self.input.remove(self.cursor);
         self.refresh();
         true
@@ -131,6 +135,7 @@ impl Session {
         if self.cursor == self.input.len() {
             return false;
         }
+        self.pending_selection = None;
         self.input.remove(self.cursor);
         self.refresh();
         true
@@ -144,17 +149,47 @@ impl Session {
     /// Commit a candidate, keeping the raw input it did not consume.
     pub fn select(&mut self, index: usize) -> Option<String> {
         let candidate = self.candidates.get(index)?.clone();
-        if let Some(learning) = &self.learning
-            && !learning.record_choice(&self.input, &self.context, &self.candidates, index)
-        {
-            return None;
-        }
+        let pending = if let Some(learning) = &self.learning {
+            let complete = candidate.consumed == self.input.len();
+            let completion = candidate.source == CandidateSource::Completion;
+            let mut pending = if completion {
+                None
+            } else {
+                self.pending_selection.clone()
+            };
+            if let Some((raw, text)) = &mut pending {
+                raw.push_str(&self.input[..candidate.consumed]);
+                text.push_str(&candidate.text);
+            }
+            let joined = pending
+                .as_ref()
+                .filter(|_| complete)
+                .map(|(raw, text)| (raw.as_str(), text.as_str()));
+            if !learning.record_choice(&self.input, &self.context, &self.candidates, index, joined)
+            {
+                return None;
+            }
+            if complete || completion {
+                None
+            } else {
+                pending.or_else(|| {
+                    Some((
+                        self.input[..candidate.consumed].to_owned(),
+                        candidate.text.clone(),
+                    ))
+                })
+            }
+        } else {
+            None
+        };
         self.input.drain(..candidate.consumed);
         self.cursor = self.cursor.saturating_sub(candidate.consumed);
         self.append_context(&candidate.text);
+        self.pending_selection = pending;
         Some(candidate.text)
     }
     pub fn commit_raw(&mut self) -> Option<String> {
+        self.pending_selection = None;
         if self.input.is_empty() {
             return None;
         }
@@ -164,6 +199,7 @@ impl Session {
         Some(text)
     }
     pub fn reset(&mut self) {
+        self.pending_selection = None;
         self.input.clear();
         self.cursor = 0;
         self.context.clear();
@@ -177,6 +213,7 @@ impl Session {
             .map_or(0, |(index, _)| index);
         let context = &context[start..];
         if self.context != context {
+            self.pending_selection = None;
             self.context = context.to_owned();
             self.refresh();
             true
@@ -398,6 +435,131 @@ mod cache_tests {
                 (&b.text, b.consumed, b.source.clone(), b.score.to_bits())
             );
         }
+    }
+    fn choose(session: &mut Session, text: &str, consumed: usize) {
+        let index = session
+            .candidates()
+            .iter()
+            .position(|c| c.text == text && c.consumed == consumed)
+            .unwrap();
+        assert_eq!(session.select(index).as_deref(), Some(text));
+    }
+
+    fn count(learning: &Learning, input: &str, text: &str) -> u32 {
+        learning.counts(
+            input,
+            &[Candidate {
+                text: text.into(),
+                consumed: input.len(),
+                source: CandidateSource::Composed,
+                score: 0.0,
+            }],
+        )[0]
+    }
+
+    #[test]
+    fn consecutive_partial_choices_remember_the_complete_raw_input_once() {
+        let learning = Arc::new(Learning::new(false));
+        let mut session = Session::new(decoder(), Some(learning.clone()));
+        session.insert("Ni'Hao").unwrap();
+        choose(&mut session, "你", 3);
+        assert_eq!(count(&learning, "Ni'Hao", "你好"), 0);
+        choose(&mut session, "好", 3);
+        assert_eq!(count(&learning, "Ni'Hao", "你好"), 1);
+        assert_eq!(count(&learning, "Ni'", "你"), 1);
+        assert_eq!(count(&learning, "Hao", "好"), 1);
+        assert_eq!(count(&learning, "ni'hao", "你好"), 0);
+
+        session.insert("ni'haoni").unwrap();
+        choose(&mut session, "你", 3);
+        choose(&mut session, "好", 3);
+        assert_eq!(count(&learning, "ni'haoni", "你好你"), 0);
+        choose(&mut session, "你", 2);
+        assert_eq!(count(&learning, "ni'haoni", "你好你"), 1);
+
+        session.insert("nihao").unwrap();
+        choose(&mut session, "你好", 5);
+        assert_eq!(count(&learning, "nihao", "你好"), 1);
+    }
+
+    #[test]
+    fn unchanged_context_invalid_edits_cursor_and_candidate_order_keep_the_selection_chain() {
+        let learning = Arc::new(Learning::new(false));
+        let mut session = Session::new(decoder(), Some(learning.clone()));
+        session.set_context(&"文".repeat(64));
+        session.insert("nihao").unwrap();
+        choose(&mut session, "你", 2);
+        let effective = session.context().to_owned();
+        assert!(!session.set_context(&format!("旧文{effective}")));
+        assert!(session.insert("中").is_err());
+        session.insert("").unwrap();
+        session.move_cursor(-100);
+        assert!(!session.backspace());
+        session.move_cursor(100);
+        assert!(!session.delete_forward());
+        session.move_cursor(-1);
+        let snapshot = session.snapshot();
+        assert!(session.apply_candidates(snapshot.revision, snapshot.candidates, Some(0), &[]));
+        choose(&mut session, "好", 3);
+        assert_eq!(count(&learning, "nihao", "你好"), 1);
+    }
+
+    #[test]
+    fn edits_external_context_reset_enter_and_completion_interrupt_segmented_learning() {
+        let decoder = Arc::new(Decoder::new(
+            Dictionary::from_rime_reader(Cursor::new(
+                "...\n你\tni\t100\n好\thao\t100\n哈\tha\t100\n奥\tao\t100\n年\tnian\t100\n",
+            ))
+            .unwrap(),
+        ));
+        for action in ["insert", "backspace", "delete", "context", "reset", "enter"] {
+            let learning = Arc::new(Learning::new(false));
+            let mut session = Session::new(decoder.clone(), Some(learning.clone()));
+            session.insert("nihao").unwrap();
+            choose(&mut session, "你", 2);
+            let (raw, text, consumed) = match action {
+                "insert" => {
+                    session.insert("ni").unwrap();
+                    ("nihaoni", "好你", 5)
+                }
+                "backspace" => {
+                    assert!(session.backspace());
+                    ("niha", "哈", 2)
+                }
+                "delete" => {
+                    session.move_cursor(-3);
+                    assert!(session.delete_forward());
+                    ("niao", "奥", 2)
+                }
+                "context" => {
+                    assert!(session.set_context("外部前文"));
+                    ("nihao", "好", 3)
+                }
+                "reset" => {
+                    session.reset();
+                    session.insert("hao").unwrap();
+                    ("nihao", "好", 3)
+                }
+                "enter" => {
+                    assert_eq!(session.commit_raw().as_deref(), Some("hao"));
+                    session.insert("hao").unwrap();
+                    ("nihao", "好", 3)
+                }
+                _ => unreachable!(),
+            };
+            choose(&mut session, text, consumed);
+            assert_eq!(count(&learning, raw, &format!("你{text}")), 0, "{action}");
+        }
+        let learning = Arc::new(Learning::new(false));
+        let mut session = Session::new(decoder, Some(learning.clone()));
+        session.insert("ni'ni").unwrap();
+        choose(&mut session, "你", 3);
+        choose(&mut session, "年", 2);
+        assert_eq!(count(&learning, "ni'ni", "你年"), 0);
+        assert_eq!(count(&learning, "ni", "年"), 0);
+        session.insert("hao").unwrap();
+        choose(&mut session, "好", 3);
+        assert_eq!(count(&learning, "ni'hao", "你好"), 0);
     }
 
     #[test]
