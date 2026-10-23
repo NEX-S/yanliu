@@ -114,6 +114,19 @@ class RankingCorpusTests(unittest.TestCase):
             self.assertFalse((directory / "out").exists())
             self.assertFalse((directory / "evidence").exists())
 
+    def test_build_rejects_wrong_jieba_version_before_output(self):
+        with tempfile.TemporaryDirectory(prefix="ranking-jieba-version-", dir=CACHE) as temporary:
+            directory = Path(temporary)
+            documents = directory / "documents.jsonl"
+            write_rows(documents, [row()])
+            actual_version = BUILD.pinyin_phrases.version
+            with mock.patch.object(BUILD.pinyin_phrases, "version", side_effect=lambda name:
+                                   "0.42.0" if name == "jieba" else actual_version(name)):
+                with self.assertRaisesRegex(ValueError, "jieba must be exactly 0.42.1"):
+                    BUILD.build(documents, directory / "out", directory / "evidence", [])
+            self.assertFalse((directory / "out").exists())
+            self.assertFalse((directory / "evidence").exists())
+
     def test_build_rejects_changed_annotation_inputs_before_recipe(self):
         for changed in ("documents.jsonl", "phrases", "loader", "exclusion.jsonl"):
             with self.subTest(changed=changed), tempfile.TemporaryDirectory(prefix="ranking-changed-input-", dir=CACHE) as temporary:
@@ -145,7 +158,7 @@ class RankingCorpusTests(unittest.TestCase):
 
     def test_annotation_uses_whole_han_run_before_slicing_polyphonic_target(self):
         paragraphs = [row(group="polyphone", text="银行")]
-        with mock.patch.object(BUILD, "lazy_pinyin", wraps=BUILD.lazy_pinyin) as annotate:
+        with mock.patch.object(BUILD.pinyin_phrases, "syllables", wraps=BUILD.pinyin_phrases.syllables) as annotate:
             proposals = BUILD.document_proposals(paragraphs, Counter())
             annotate.assert_not_called()
             cases = [BUILD.annotate(proposal) for proposal in proposals]
@@ -173,6 +186,16 @@ class RankingCorpusTests(unittest.TestCase):
         self.assertEqual(target["target_start"], 3)
         case = BUILD.annotate(target)
         self.assertEqual((case["context"], case["input"]), ("他向女", "wangjugong"))
+
+    def test_segmentation_prevents_cross_word_de_and_le_misreadings(self):
+        for text, start, context, gold, expected in (
+                ("对不起您拨打的用户暂时无法接通", 6, "对不起您拨打", "的用户", "deyonghu"),
+                ("明天就是周末了", 2, "今天是周五，明天", "就是周末了", "jiushizhoumole")):
+            with self.subTest(text=text):
+                case = BUILD.annotate({"run": text, "target_start": start,
+                                       "case": {"context": context, "gold": gold}})
+                self.assertEqual(case["input"], expected)
+                self.assertEqual(case["context"], context)
 
     def test_no_context_uses_complete_naturally_delimited_runs(self):
         for text, targets in (("银行", {"银行"}), ("晴，银行，去公园，明天一起散步。", {"晴", "银行", "去公园", "明天一起散步"}),
@@ -265,35 +288,50 @@ class RankingCorpusTests(unittest.TestCase):
             directory = Path(temporary)
             documents = directory / "documents.jsonl"
             write_rows(documents, [row()])
-            with mock.patch.object(BUILD, "lazy_pinyin", side_effect=lambda text, **kwargs: ["?" for _ in text]):
+            with mock.patch.object(BUILD.pinyin_phrases, "syllables", side_effect=lambda text, **kwargs: ["?" for _ in text]):
                 recipe = BUILD.build(documents, directory / "out", directory / "evidence", [])
             counts = recipe["splits"]["train"]["source_stats"]["lccc"]
             self.assertEqual(counts["non_ascii_full_pinyin"], counts["annotation_pool_cases"])
             self.assertEqual(counts["written"], 0)
 
-    def test_evaluation_exclusion_uses_complete_query_and_expands_gold_sets(self):
+    def test_evaluation_exclusion_uses_context_and_gold_sets(self):
         with tempfile.TemporaryDirectory(prefix="ranking-exclusions-", dir=CACHE) as temporary:
             path = Path(temporary) / "eval.jsonl"
             write_rows(path, [{"input": "ru", "context": "出", "golds": ["入", "如"]},
                               {"id": "annotation-without-query", "normalized_text": "出现"}])
-            excluded, files = BUILD.evaluation_queries([path])
+            excluded, files = BUILD.evaluation_texts([path])
             self.assertEqual(len(excluded), 2)
-            self.assertIn(BUILD.query_key({"input": "ru", "context": "出", "gold": "入"}), excluded)
-            self.assertNotIn(BUILD.query_key({"input": "ru", "context": "加", "gold": "入"}), excluded)
+            self.assertIn(BUILD.text_key({"input": "ru", "context": "出", "gold": "入"}), excluded)
+            self.assertNotIn(BUILD.text_key({"input": "ru", "context": "加", "gold": "入"}), excluded)
             self.assertEqual(files[0]["sha256"], BUILD.digest(path))
 
-    def test_query_dedup_matches_training_boundary_punctuation_and_unicode_normalization(self):
+    def test_text_dedup_ignores_pinyin_and_normalizes_punctuation_and_unicode(self):
         first = {"input": "ＲＵ", "context": "你 来。", "gold": "入"}
-        second = {"input": "ru", "context": "你来！", "gold": "入"}
-        self.assertEqual(BUILD.query_key(first), BUILD.query_key(second))
-        self.assertNotEqual(BUILD.query_key(first), BUILD.query_key(dict(second, context="他来")))
+        second = {"input": "differentpinyin", "context": "你来！", "gold": "入"}
+        self.assertEqual(BUILD.text_key(first), BUILD.text_key(second))
+        self.assertNotEqual(BUILD.text_key(first), BUILD.text_key(dict(second, context="他来")))
+
+    def test_changed_pinyin_cannot_bypass_existing_evaluation_text_exclusion(self):
+        with tempfile.TemporaryDirectory(prefix="ranking-text-exclusion-", dir=CACHE) as temporary:
+            directory = Path(temporary)
+            documents = directory / "documents.jsonl"
+            write_rows(documents, [row(group=f"de-{index}", text="的") for index in range(32)])
+            BUILD.build(documents, directory / "baseline", directory / "baseline-evidence", [])
+            baseline = read_rows(directory / "baseline/ranking-train.jsonl")
+            self.assertEqual([(case["context"], case["gold"], case["input"]) for case in baseline],
+                             [("", "的", "de")])
+            exclusion = directory / "old-evaluation.jsonl"
+            write_rows(exclusion, [dict(baseline[0], input="di")])
+            recipe = BUILD.build(documents, directory / "out", directory / "evidence", [exclusion])
+            self.assertEqual(read_rows(directory / "out/ranking-train.jsonl"), [])
+            self.assertGreater(recipe["splits"]["train"]["source_stats"]["lccc"]["existing_evaluation_text"], 0)
 
     def test_public_learning_choices_are_excluded_but_queries_without_choices_are_not_labels(self):
         path = ROOT / "data/eval/learning-context.jsonl"
-        excluded, _ = BUILD.evaluation_queries([path])
+        excluded, _ = BUILD.evaluation_texts([path])
         self.assertEqual(excluded, {
-            BUILD.query_key({"input": "xian", "context": "乘火车前往", "gold": "西安"}),
-            BUILD.query_key({"input": "xian", "context": "此时此刻", "gold": "现"}),
+            BUILD.text_key({"input": "xian", "context": "乘火车前往", "gold": "西安"}),
+            BUILD.text_key({"input": "xian", "context": "此时此刻", "gold": "现"}),
         })
 
     def test_cli_uses_public_evaluations_and_explicit_repeatable_exclusions(self):
@@ -317,7 +355,7 @@ class RankingCorpusTests(unittest.TestCase):
             self.assertEqual(recipe["exclusion_files"], [{"path": str(public.resolve()), "sha256": BUILD.digest(public)}])
             self.assertFalse((directory / "results").exists())
             baseline = read_rows(directory / "baseline/ranking-train.jsonl")
-            self.assertNotIn(BUILD.query_key(public_case), {BUILD.query_key(case) for case in baseline})
+            self.assertNotIn(BUILD.text_key(public_case), {BUILD.text_key(case) for case in baseline})
             extra_paths = [directory / f"extra-{index}.jsonl" for index in range(2)]
             for path, case in zip(extra_paths, baseline[:2]):
                 write_rows(path, [case])
@@ -327,8 +365,8 @@ class RankingCorpusTests(unittest.TestCase):
             with mock.patch.object(BUILD, "ROOT", directory), mock.patch("sys.argv", args), mock.patch("builtins.print"):
                 BUILD.main()
             cases = read_rows(directory / "out/ranking-train.jsonl")
-            self.assertEqual({BUILD.query_key(case) for case in cases},
-                             {BUILD.query_key(case) for case in baseline[2:]})
+            self.assertEqual({BUILD.text_key(case) for case in cases},
+                             {BUILD.text_key(case) for case in baseline[2:]})
             recipe = json.loads((directory / "evidence/ranking-data-recipe.json").read_text(encoding="utf-8"))
             self.assertEqual(recipe["exclusion_files"],
                              [{"path": str(path.resolve()), "sha256": BUILD.digest(path)} for path in [public, *extra_paths]])
@@ -363,7 +401,7 @@ class RankingCorpusTests(unittest.TestCase):
                         list(BUILD.read_documents(path))
                     self.assertIn(str(path) + ":", str(error.exception))
 
-    def test_build_preserves_splits_hashes_counts_limits_and_exact_query_dedup(self):
+    def test_build_preserves_splits_hashes_counts_limits_and_text_dedup(self):
         with tempfile.TemporaryDirectory(prefix="ranking-build-", dir=CACHE) as temporary:
             directory = Path(temporary)
             documents, exclusions = directory / "documents.jsonl", directory / "eval.jsonl"
@@ -383,6 +421,7 @@ class RankingCorpusTests(unittest.TestCase):
             first = BUILD.build(documents, directory / "out-a", directory / "evidence-a", [exclusions], limits, limits, limits)
             second = BUILD.build(documents, directory / "out-b", directory / "evidence-b", [exclusions], limits, limits, limits)
             self.assertEqual(first["pypinyin_version"], version("pypinyin"))
+            self.assertEqual(first["jieba_version"], version("jieba"))
             self.assertEqual(first["documents"]["sha256"], BUILD.digest(documents))
             queries, ids = set(), set()
             excluded_count = duplicate_count = budget_count = 0
@@ -401,10 +440,10 @@ class RankingCorpusTests(unittest.TestCase):
                     self.assertEqual(ownership[case["source_group"]], split)
                     self.assertEqual(case["group_id"], case["source_group"])
                     self.assertNotIn(case["id"], ids)
-                    self.assertNotIn(BUILD.query_key(case), queries)
-                    self.assertNotEqual(BUILD.query_key(case), BUILD.query_key(blocked))
+                    self.assertNotIn(BUILD.text_key(case), queries)
+                    self.assertNotEqual(BUILD.text_key(case), BUILD.text_key(blocked))
                     ids.add(case["id"])
-                    queries.add(BUILD.query_key(case))
+                    queries.add(BUILD.text_key(case))
                     by_document[case["source_group"]] += 1
                 self.assertTrue(all(count <= (4 if split == "train" else 1) for count in by_document.values()))
                 for source, stats in summary["source_stats"].items():
@@ -413,10 +452,10 @@ class RankingCorpusTests(unittest.TestCase):
                     self.assertEqual(stats["pypinyin_calls"], stats["annotation_pool_cases"])
                     self.assertEqual(stats["sampled_document_cases"], stats["hash_pool_not_selected"] + stats["annotation_pool_cases"])
                     self.assertEqual(stats["annotation_pool_cases"], sum(stats[key] for key in
-                        ("non_ascii_full_pinyin", "existing_evaluation_query", "duplicate_exact_query", "unique_eligible_cases")))
+                        ("non_ascii_full_pinyin", "existing_evaluation_text", "duplicate_text", "unique_eligible_cases")))
                     self.assertEqual(stats["unique_eligible_cases"] - stats["written"], stats["source_budget_not_selected"])
-                    excluded_count += stats.get("existing_evaluation_query", 0)
-                    duplicate_count += stats.get("duplicate_exact_query", 0)
+                    excluded_count += stats.get("existing_evaluation_text", 0)
+                    duplicate_count += stats.get("duplicate_text", 0)
                     budget_count += stats["source_budget_not_selected"]
             self.assertGreater(excluded_count, 0)
             self.assertGreater(duplicate_count, 0)

@@ -92,8 +92,10 @@ def teacher_cases(response):
 
 def pinyin(gold, context=""):
     # Keep a known target phrase intact instead of letting context absorb its first character.
-    text = [gold] if len(gold) > 1 and gold in PHRASES_DICT else context + gold
-    return "".join(lazy_pinyin(text, style=Style.NORMAL)[-len(gold):])
+    syllables = (lazy_pinyin([gold], style=Style.NORMAL)
+                 if len(gold) > 1 and gold in PHRASES_DICT
+                 else pinyin_phrases.syllables(context + gold))
+    return "".join(syllables[-len(gold):])
 
 
 def load_pairs(path):
@@ -278,7 +280,8 @@ def run_continuous(args):
     timestamp = lambda: datetime.now(timezone.utc).isoformat()
     summary = {
         "status": "running", "mode": "continuous", "teacher_model": TEACHER_MODEL,
-        "endpoint": endpoint, "pypinyin": pinyin_phrases.PYPINYIN_VERSION, "argv": sys.argv,
+        "endpoint": endpoint, "pypinyin": pinyin_phrases.PYPINYIN_VERSION,
+        "jieba": pinyin_phrases.JIEBA_VERSION, "argv": sys.argv,
         "files": files, "started_at": datetime.fromtimestamp(started, timezone.utc).isoformat(),
         "deadline_at": datetime.fromtimestamp(started + duration, timezone.utc).isoformat(),
         "duration_seconds": duration, "interval_seconds": args.interval_seconds,
@@ -456,7 +459,8 @@ def run(args):
         "status": status, "mode": "pairs" if pairs is not None else "general",
         "generate_only": args.generate_only, "check_skipped": args.generate_only or not case_count,
         "teacher_model": TEACHER_MODEL, "endpoint": endpoint,
-        "pypinyin": pinyin_phrases.PYPINYIN_VERSION, "argv": sys.argv, "files": files, "rounds": rounds, "buckets": buckets,
+        "pypinyin": pinyin_phrases.PYPINYIN_VERSION, "jieba": pinyin_phrases.JIEBA_VERSION,
+        "argv": sys.argv, "files": files, "rounds": rounds, "buckets": buckets,
     })
     print(json.dumps({"status": status, "output_dir": str(output), "cases": case_count,
                       "failed_rounds": failed, "all": buckets.get("all")}, ensure_ascii=False), flush=True)

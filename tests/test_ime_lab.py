@@ -111,6 +111,10 @@ class ImeLabTests(unittest.TestCase):
         self.assertEqual(lab.pinyin("这次事故让我亲身体会到了系安全带是多么重要的一件事"),
                          "zhecishigurangwoqinshentihuidaolejianquandaishiduomezhongyaodeyijianshi")
 
+    def test_segmentation_prevents_cross_word_de_and_le_misreadings(self):
+        self.assertEqual(lab.pinyin("的用户", "对不起您拨打"), "deyonghu")
+        self.assertEqual(lab.pinyin("就是周末了", "今天是周五，明天"), "jiushizhoumole")
+
     def test_phrase_supplement_rejects_invalid_boundary_data(self):
         invalid = ([], {}, {"重构": ["chong", "gou"]}, {"重构": [["chong"]]},
                    {"重构": [["chong", "zhong"], ["gou"]]}, {"重构": [["chong"], [None]]},
@@ -160,6 +164,23 @@ class ImeLabTests(unittest.TestCase):
                       patch.object(lab.urllib.request, "urlopen") as gateway,
                       patch.object(lab.subprocess, "run") as cli):
                     with self.assertRaisesRegex(ValueError, "pypinyin must be exactly 0.55.0"):
+                        lab.main()
+                gateway.assert_not_called()
+                cli.assert_not_called()
+                self.assertFalse(output.exists())
+
+    def test_snapshot_rejects_wrong_jieba_version_before_any_request(self):
+        for mode in ([], ["--duration-hours", "0.01"]):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory(prefix="yanliu-ime-lab-jieba-version-", dir=CACHE) as directory:
+                output = Path(directory) / "evidence"
+                argv = ["ime_lab.py", "--output-dir", str(output), "--endpoint", "https://gateway.example/openai", *mode]
+                actual_version = lab.pinyin_phrases.version
+                with (patch.object(lab.sys, "argv", argv),
+                      patch.object(lab.pinyin_phrases, "version", side_effect=lambda name:
+                                   "0.42.0" if name == "jieba" else actual_version(name)),
+                      patch.object(lab.urllib.request, "urlopen") as gateway,
+                      patch.object(lab.subprocess, "run") as cli):
+                    with self.assertRaisesRegex(ValueError, "jieba must be exactly 0.42.1"):
                         lab.main()
                 gateway.assert_not_called()
                 cli.assert_not_called()

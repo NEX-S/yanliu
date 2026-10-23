@@ -15,7 +15,6 @@ from pathlib import Path
 import re
 import unicodedata
 
-from pypinyin import Style, lazy_pinyin
 import pinyin_phrases
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -35,8 +34,8 @@ COUNT_FIELDS = ("documents", "paragraphs", "han_runs", "proposed_slots",
                 "no_context_run_not_naturally_delimited", "no_context_run_outside_slot_length", "fitting_proposals",
                 "document_slot_not_selected", "selected_document_slots", "pypinyin_calls",
                 "hash_pool_not_selected", "annotation_pool_cases",
-                "non_ascii_full_pinyin", "sampled_document_cases", "existing_evaluation_query",
-                "duplicate_exact_query", "unique_eligible_cases", "written", "source_budget_not_selected")
+                "non_ascii_full_pinyin", "sampled_document_cases", "existing_evaluation_text",
+                "duplicate_text", "unique_eligible_cases", "written", "source_budget_not_selected")
 
 
 def digest(path):
@@ -49,8 +48,8 @@ def hashed(*parts):
     return hashlib.sha256(value).digest()
 
 
-def query_key(case, gold=None):
-    fields = (case["input"], case.get("context", ""), case["gold"] if gold is None else gold)
+def text_key(case, gold=None):
+    fields = (case.get("context", ""), case["gold"] if gold is None else gold)
     return hashed(*("".join(char for char in unicodedata.normalize("NFKC", field).casefold() if char.isalnum())
                     for field in fields))
 
@@ -157,9 +156,7 @@ def document_proposals(paragraphs, counts):
 
 def annotate(proposal):
     text = proposal["run"]
-    syllables = lazy_pinyin(text, style=Style.NORMAL, strict=True, errors=lambda value: list(value))
-    if len(syllables) != len(text):
-        raise ValueError("pypinyin did not preserve whole-Han-run character alignment")
+    syllables = pinyin_phrases.syllables(text)
     case = proposal["case"]
     start = proposal["target_start"]
     target_syllables = syllables[start:start + len(case["gold"])]
@@ -168,7 +165,7 @@ def annotate(proposal):
     return dict(case, input="".join(target_syllables))
 
 
-def evaluation_queries(paths):
+def evaluation_texts(paths):
     queries, files = set(), []
     for path in paths:
         path = Path(path)
@@ -188,7 +185,7 @@ def evaluation_queries(paths):
                 for gold in golds:
                     if not isinstance(gold, str):
                         raise ValueError(f"{path}: invalid evaluation gold")
-                    queries.add(query_key(row, gold))
+                    queries.add(text_key(row, gold))
     return queries, files
 
 
@@ -206,7 +203,7 @@ def build(documents, output, evidence, exclusion_paths,
         if path.exists():
             raise FileExistsError(path)
     document_sha = digest(documents)
-    excluded, exclusion_files = evaluation_queries(exclusion_paths)
+    excluded, exclusion_files = evaluation_texts(exclusion_paths)
     phrases_path = (ROOT / PINYIN_PHRASES).resolve()
     phrases_file = {"path": str(phrases_path), "sha256": pinyin_phrases.load_pinyin_phrases(phrases_path)}
     loader_path = Path(pinyin_phrases.__file__).resolve()
@@ -260,12 +257,12 @@ def build(documents, output, evidence, exclusion_paths,
                 if case is None:
                     stats["non_ascii_full_pinyin"] += 1
                     continue
-                identity = query_key(case)
+                identity = text_key(case)
                 if identity in excluded:
-                    stats["existing_evaluation_query"] += 1
+                    stats["existing_evaluation_text"] += 1
                     continue
                 if identity in seen:
-                    stats["duplicate_exact_query"] += 1
+                    stats["duplicate_text"] += 1
                     continue
                 seen.add(identity)
                 stats["unique_eligible_cases"] += 1
@@ -289,15 +286,16 @@ def build(documents, output, evidence, exclusion_paths,
             raise ValueError(f"{boundary['path']} changed during ranking-case construction")
     recipe = {"format": "yanliu-public-ranking-data-v1", "documents": document_file,
               "script_sha256": script_sha, "pypinyin_version": pinyin_phrases.PYPINYIN_VERSION,
+              "jieba_version": pinyin_phrases.JIEBA_VERSION,
               "pinyin_phrases": phrases_file, "pinyin_phrases_loader": loader_file,
-              "exclusion_files": exclusion_files, "existing_evaluation_queries": len(excluded),
+              "exclusion_files": exclusion_files, "existing_evaluation_texts": len(excluded),
               "rules": {"split": "inherit each complete source/group document assignment; never reassign cases",
                         "document_caps": {"train": 4, "dev": 1, "holdout": 1},
                         "lengths": "one train slot each for 1,2,3-4,5-8 characters; dev/holdout slot chosen by SHA256",
                         "sampling": "contextual slots use SHA256(document, paragraph, Han-run offset, slot) to fix cut and length; no-context slots use only complete Han runs whose length fits the slot and whose neighbors are punctuation/whitespace or document edges, checking adjacent paragraphs at internal paragraph edges; minimum document-slot hash chooses paragraph/run; independent source-budget hash selects a fixed pool of ceil(1.25 * target) before any pypinyin call; annotate/filter/deduplicate only this pool, retain at most target in original hash order; no adaptive resampling to fill shortfalls",
                         "context": "document-slot hash requests empty context 25% of the time, rejecting no-context runs bounded by digits/Latin or unpunctuated paragraph cuts; otherwise preserve 1..32 preceding paragraph characters including punctuation and earlier turns from that conversation; a target may begin at a Han-run boundary when the paragraph already has context; never cross paragraph/conversation boundaries",
-                        "pinyin": "pinned pypinyin with the recorded public phrase supplement; NORMAL strict on each complete contiguous Han run before target slicing; one lowercase ASCII syllable per target character; automatic polyphonic readings are not human gold",
-                        "dedup": "SHA256 of NFKC/casefold/alphanumeric-normalized (input,context,gold), matching the train_ranker input boundary, against recorded existing evaluation and globally across the fixed annotation pools; different substantive contexts of a common word remain eligible",
+                        "pinyin": "pinned jieba precise segmentation with HMM=True and the recorded public supplement keys, then pinned pypinyin NORMAL strict on each complete contiguous Han run before target slicing; one lowercase ASCII syllable per target character; automatic polyphonic readings are not human gold",
+                        "dedup": "SHA256 of NFKC/casefold/alphanumeric-normalized (context,gold), independent of input pronunciation, against recorded existing evaluation and globally across the fixed annotation pools; different substantive contexts of a common word remain eligible",
                         "selection": "public text only; no CLI calls, model scores, candidate filtering or gold injection into recall",
                         "source_groups": "source_group/group_id inherit source:split_group (NaturalConv news document; CPED TV series); document_group identifies the concrete conversation/page/question used for per-document slot limits",
                         "evaluation": "holdout limits select only fresh NaturalConv/CPED; old-source heldouts remain corpus regression data; original spelling and automatic pinyin can be noisy",

@@ -77,7 +77,7 @@ target/release/yanliu --model data/models/sentence-model.safetensors evaluate --
 
 ## 生成公开合成案例
 
-`scripts/ime_lab.py` 通过 llmux 的 OpenAI 兼容接口请求固定模型 deepseek-flash 生成公开合成中文案例（前文、目标、领域），用固定版本 pypinyin 和[小型公开词组读音补充](../data/training/pinyin-phrases.README.md)注音，按规则校验后交给 `evaluate`。完整多字目标若已收录在词组表中，优先使用目标自身的默认读音，避免“逐步／调试”被切成“步调”；其余目标与前文一起注音，再只截取目标的音节，保留“银／行”等跨边界读音。补充数据修复了“重构、弹窗、去重、重命名、乐声、差旅、代码行、认真地、轻轻地、系安全带”十条已核实的缺失读音。默认词组读音不保证适合所有多音词语境，自动注音仍须复核，不能按候选是否命中修改读音或筛掉案例。请求只发送抽象提示、明确提供的公开词对或已生成的目标列表，不发送密钥、私有语料、应用上下文或个人学习；输入法运行时不接入远端模型。
+`scripts/ime_lab.py` 通过 llmux 的 OpenAI 兼容接口请求固定模型 deepseek-flash 生成公开合成中文案例（前文、目标、领域），用固定版本 pypinyin 和[小型公开词组读音补充](../data/training/pinyin-phrases.README.md)注音，按规则校验后交给 `evaluate`。完整多字目标若已收录在词组表中，优先使用目标自身的默认读音，避免“逐步／调试”被切成“步调”；其余目标先将前文与目标连起来，用固定 `jieba==0.42.1` 精确模式（`HMM=True`）分词后注音，再只截取目标的音节，保留“银／行”等跨边界读音。补充数据修复了“重构、弹窗、去重、重命名、乐声、差旅、代码行、认真地、轻轻地、系安全带”十条已核实的缺失读音。默认词组读音不保证适合所有多音词语境，自动注音仍须复核，不能按候选是否命中修改读音或筛掉案例。请求只发送抽象提示、明确提供的公开词对或已生成的目标列表，不发送密钥、私有语料、应用上下文或个人学习；输入法运行时不接入远端模型。
 
 ```sh
 python3 -m venv .cache/yanliu-lab
@@ -98,7 +98,7 @@ OPENAI_BASE_URL="${ANTHROPIC_BASE_URL%/anthropic}/openai" \
   --cases-per-round 16 --interval-seconds 60
 ```
 
-`--duration-hours` 与 `--rounds`、`--pairs`、`--generate-only` 互斥。请求和 CLI 串行执行，分别受 `--request-timeout`、`--cli-timeout` 及剩余总时长约束；到截止时中断尚未完成的批次，不将其计入 `completed_rounds`。HTTP、CLI 或资产变化错误会明确终止，保留已完成批次及失败原因，不自动重试。持续运行前可冻结 binary、模型、词库与源码；`--binary`、`--model`、`--dictionary-dir` 指向所测快照，每批检查哈希未变。冻结生成器时，须同时复制相邻的 `scripts/pinyin_phrases.py`，并把 `data/training/pinyin-phrases.json` 按相对于 runner 仓库根目录的同名路径一起复制，保留其来源说明；pypinyin 版本不符、文件缺失或格式无效会在请求前明确报错。有限与持续模式分别以 `files.pinyin_phrases`、`files.pinyin_phrases_loader` 绑定实际加载数据和加载器源码的 SHA-256，持续模式每批也检查它们未变。
+`--duration-hours` 与 `--rounds`、`--pairs`、`--generate-only` 互斥。请求和 CLI 串行执行，分别受 `--request-timeout`、`--cli-timeout` 及剩余总时长约束；到截止时中断尚未完成的批次，不将其计入 `completed_rounds`。HTTP、CLI 或资产变化错误会明确终止，保留已完成批次及失败原因，不自动重试。持续运行前可冻结 binary、模型、词库与源码；`--binary`、`--model`、`--dictionary-dir` 指向所测快照，每批检查哈希未变。冻结生成器时，须同时复制相邻的 `scripts/pinyin_phrases.py`，并把 `data/training/pinyin-phrases.json` 按相对于 runner 仓库根目录的同名路径一起复制，保留其来源说明；pypinyin 或 jieba 版本不符、文件缺失或格式无效会在请求前明确报错。有限与持续模式分别以 `files.pinyin_phrases`、`files.pinyin_phrases_loader` 绑定实际加载数据和加载器源码的 SHA-256，持续模式每批也检查它们未变。两种模式的汇总均记录实际使用的固定 pypinyin、jieba 版本。
 
 持续模式保存每批 `round-XXX-cases.jsonl`、`round-XXX-check.json` 和轮次记录，完成评估的案例追加到 `cases.jsonl`。`summary.json` 随批次更新，含起止时间、截止时间、完成批次、案例数、API 返回的 usage 和完整分母下的 top1/top5/recall、静态命中、rescue/breakage 计数。`issues.json` 按 `(input, context, golds, kind)` 去重，记录首次与最近出现、次数、样例路径及前十个完整消费的非 Completion 候选，完整候选身份保留在每批 check 中。
 
@@ -195,9 +195,9 @@ python3 -m venv .cache/yanliu-corpus
 
 训练预算默认分别为 LCCC 15M、Wikipedia 25M、CQIA 最多 12M、NaturalConv 最多 2M、CPED 全训练集（1M 上限）、TNEWS 1M 字符，不足如实记录。NaturalConv 的训练抽样审查发现同音错字和表达问题，因此只作少量口语补充，不自动改写原文，也不将抽样错误比例推为总体错误率。训练文本保留中文标点；词表包含全部 8105 规范汉字、词库单字、ASCII、固定标点和训练集高频扩展字符。`data-recipe.json` 保留来源哈希、质量备注、规则、来源数量、实际训练频次覆盖与 OOV。`compact-spec.json`（6 层×192、4 头）、`small-spec.json`（6 层×256、4 头）、`large-spec.json`（8 层×448、8 头）共享字表和 64 字符窗口，可直接传给预训练的 `--spec`。
 
-排序案例继承原文档 split，先按固定 hash 和各来源独立预算选样，再对完整连续汉字段注音后截取目标。`build_ranking_corpus.py` 与合成案例入口共用 `pinyin_phrases.py`，检查同一固定 pypinyin 版本并加载上述十条公开词组读音；整段注音、目标切片的规则保持不变。`ranking-data-recipe.json` 的 `pinyin_phrases`、`pinyin_phrases_loader` 记录实际路径和 SHA-256，并与入口源码、原文和排除集一起检查文件未变。版本不符或补充文件无效时，不开始生成；历史数据与成绩保持原样。需要上下文的案例保持 hash 选定的任意字界和长度，保留目标在同一段落中之前最多 32 个字符，包括标点与前轮话语；已有前文时，目标可从当前汉字段首字开始。hash 为每个文档长度槽位以 25% 概率请求无上下文；此时目标必须是长度落在该槽位区间的完整汉字段，左右均须是标点、空白或文档首尾，不从字段内部随机截取。文档内部段界检查相邻段落的实际边缘字符，不能把无标点的强制切段或数字、拉丁字母造成的汉字段边界当作自然边界；无可用完整字段的槽位按边界或长度拒绝原因计数，不改成有上下文或补采样。无上下文仍为空串，不跨不同段落或会话取前文。默认 train 预算 80,000、dev 2,000；fresh holdout 仅收 NaturalConv 最多 1,000 和 CPED 最多 750 例，旧来源 heldout 仅作语料回归。可重复使用 `--train-limit SOURCE=COUNT`、`--dev-limit SOURCE=COUNT`、`--holdout-limit SOURCE=COUNT` 改固定预算。`source_group`/`group_id` 保留真实 split 大组，`document_group` 表示具体采样文档；CPED holdout 最多只有官方 9 部剧的独立大组。程序不调用模型、不按召回或成绩挑样，实际数量不足时如实记录。原文错字及自动拼音可能影响监督，因此这些案例不是干净的人工金标。`ranking-dev.jsonl` 用于选模；`ranking-holdout.jsonl` 和 `corpus/holdout.txt` 保留至训练与策略冻结后评估，不传给训练入口。
+排序案例继承原文档 split，先按固定 hash 和各来源独立预算选样，再对完整连续汉字段注音后截取目标。`build_ranking_corpus.py` 与合成案例入口共用 `pinyin_phrases.py`，检查 `pypinyin==0.55.0`、`jieba==0.42.1` 并加载上述十条公开词组读音。先用 jieba 精确模式（`HMM=True`）给完整汉字段分词，再用 pypinyin 逐词注音；同十条补充也作为 jieba 词界，不增添按评测答案编写的词组。整段对齐、目标切片的规则保持不变，词内目标仍从整段结果取音节。合成入口保留已知完整目标词优先的语义。自动分词和词典读音不能保证语境中的多音字正确。配方同时记录两个工具的版本。`ranking-data-recipe.json` 的 `pinyin_phrases`、`pinyin_phrases_loader` 记录实际路径和 SHA-256，并与入口源码、原文和排除集一起检查文件未变。版本不符或补充文件无效时，不开始生成；历史数据与成绩保持原样。需要上下文的案例保持 hash 选定的任意字界和长度，保留目标在同一段落中之前最多 32 个字符，包括标点与前轮话语；已有前文时，目标可从当前汉字段首字开始。hash 为每个文档长度槽位以 25% 概率请求无上下文；此时目标必须是长度落在该槽位区间的完整汉字段，左右均须是标点、空白或文档首尾，不从字段内部随机截取。文档内部段界检查相邻段落的实际边缘字符，不能把无标点的强制切段或数字、拉丁字母造成的汉字段边界当作自然边界；无可用完整字段的槽位按边界或长度拒绝原因计数，不改成有上下文或补采样。无上下文仍为空串，不跨不同段落或会话取前文。默认 train 预算 80,000、dev 2,000；fresh holdout 仅收 NaturalConv 最多 1,000 和 CPED 最多 750 例，旧来源 heldout 仅作语料回归。可重复使用 `--train-limit SOURCE=COUNT`、`--dev-limit SOURCE=COUNT`、`--holdout-limit SOURCE=COUNT` 改固定预算。`source_group`/`group_id` 保留真实 split 大组，`document_group` 表示具体采样文档；CPED holdout 最多只有官方 9 部剧的独立大组。程序不调用模型、不按召回或成绩挑样，实际数量不足时如实记录。原文错字及自动拼音可能影响监督，因此这些案例不是干净的人工金标。`ranking-dev.jsonl` 用于选模；`ranking-holdout.jsonl` 和 `corpus/holdout.txt` 保留至训练与策略冻结后评估，不传给训练入口。
 
-语料准备与排序案例构建都默认排除仓库内 `data/eval/*.jsonl`；额外已观测评测须分别向两个命令重复传入 `--exclude PATH`，显式指定的文件必须存在，路径和 SHA-256 进入各自配方。语料按规范化后至少 6 字符的 context+gold 作为子串排除，排序案例按与训练入口一致的 NFKC/casefold/字母数字规范化完整查询去重和排除，不把短常用词整体禁用；不会自动扫描本地 `results/` 或个人数据。
+语料准备与排序案例构建都默认排除仓库内 `data/eval/*.jsonl`；额外已观测评测须分别向两个命令重复传入 `--exclude PATH`，显式指定的文件必须存在，路径和 SHA-256 进入各自配方。语料按规范化后至少 6 字符的 context+gold 作为子串排除，排序案例按 NFKC/casefold/字母数字规范化后的 `(context, gold)` 去重和排除，拼音修正不会让相同中文样本绕过旧评测排除；不同实质前文仍可保留，不把短常用词整体禁用；不会自动扫描本地 `results/` 或个人数据。
 
 ### 7M 实验配置（2026-10-21）
 
