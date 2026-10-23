@@ -356,7 +356,7 @@
      fn score_against(&self, prefix: &Prefix, candidates: &[&str]) -> Vec<f32> {
          candidates
              .iter()
-@@ -510,41 +603,29 @@
+@@ -510,44 +603,44 @@
          }
          let last = (tokens.len() - 1) * n_embd;
          let last_hidden = layer_norm(&x[last..], &self.final_weight, &self.final_bias, n_embd);
@@ -380,8 +380,8 @@
      }
  
 -    /// The same run, keeping everything it passed through rather than only the total.
-+    /// Runs a candidate, retaining keys, values and normalized hidden rows at every position so
-+    /// later candidates can resume at any shared prefix.
++    /// Retains the states needed to score a candidate. Its last token only needs the preceding
++    /// state, so leave it unadvanced; later candidates can resume before that token.
      ///
 -    /// `score_tail` builds the extended keys and values in order to attend over them and then drops
 -    /// them, along with the hidden state at every position and the running sum. Those are what a
@@ -406,39 +406,61 @@
 +    /// addition cannot be reassociated without changing score bits.
      fn run_tail(&self, prefix: &Prefix, tail: &[u32]) -> TailRun {
          let n_embd = self.config.n_embd;
-         let mut x = self.embed(tail, prefix.length);
-@@ -560,8 +641,10 @@
+-        let mut x = self.embed(tail, prefix.length);
++        let advanced = tail.len() - 1;
++        let first_token = (tail[0] as usize).min(self.config.vocab - 1);
++        if advanced == 0 {
++            return TailRun {
++                base: prefix.length,
++                keys: prefix.keys.clone(),
++                values: prefix.values.clone(),
++                hidden: Vec::new(),
++                cumulative: vec![prefix.last_distribution[first_token]],
++                last_distribution: None,
++            };
++        }
++        let mut x = self.embed(&tail[..advanced], prefix.length);
+         let mut keys_out = Vec::with_capacity(self.blocks.len());
+         let mut values_out = Vec::with_capacity(self.blocks.len());
+         for (layer, block) in self.blocks.iter().enumerate() {
+@@ -559,12 +652,14 @@
+                 n_embd,
                  3 * n_embd,
              );
-             let (q, k, v) = split_qkv(&qkv, tail.len(), n_embd);
+-            let (q, k, v) = split_qkv(&qkv, tail.len(), n_embd);
 -            let mut keys = prefix.keys[layer].clone();
 -            let mut values = prefix.values[layer].clone();
++            let (q, k, v) = split_qkv(&qkv, advanced, n_embd);
 +            let mut keys = Vec::with_capacity(prefix.keys[layer].len() + k.len());
 +            let mut values = Vec::with_capacity(prefix.values[layer].len() + v.len());
 +            keys.extend_from_slice(&prefix.keys[layer]);
 +            values.extend_from_slice(&prefix.values[layer]);
              keys.extend_from_slice(&k);
              values.extend_from_slice(&v);
-             let attended = self.attention(&q, &keys, &values, tail.len(), prefix.length);
-@@ -583,24 +666,24 @@
+-            let attended = self.attention(&q, &keys, &values, tail.len(), prefix.length);
++            let attended = self.attention(&q, &keys, &values, advanced, prefix.length);
+             let projected = linear(
+                 &attended,
+                 &block.proj_weight,
+@@ -583,24 +678,20 @@
  
          // Position i predicts token i + 1. The opening character is therefore predicted by the last
          // prefix position, and every later one by the tail position before it.
 -        let mut running = self.log_probability(&prefix.last_hidden, tail[0]);
-+        let first_token = (tail[0] as usize).min(self.config.vocab - 1);
 +        let mut running = prefix.last_distribution[first_token];
          let mut cumulative = Vec::with_capacity(tail.len());
          cumulative.push(running);
 -        let mut hidden = Vec::with_capacity(tail.len());
-         for step in 0..tail.len() {
+-        for step in 0..tail.len() {
 -            let row = normed[step * n_embd..(step + 1) * n_embd].to_vec();
-+            let row = &normed[step * n_embd..(step + 1) * n_embd];
-             if step + 1 < tail.len() {
+-            if step + 1 < tail.len() {
 -                running += self.log_probability(&row, tail[step + 1]);
-+                running += self.log_probability(row, tail[step + 1]);
-                 cumulative.push(running);
-             }
+-                cumulative.push(running);
+-            }
 -            hidden.push(row);
++        for (step, row) in normed.chunks_exact(n_embd).enumerate() {
++            running += self.log_probability(row, tail[step + 1]);
++            cumulative.push(running);
          }
          TailRun {
              base: prefix.length,
@@ -451,7 +473,7 @@
          }
      }
  
-@@ -634,44 +717,20 @@
+@@ -634,44 +725,20 @@
      /// the most expensive step per scored character.
      fn log_probability(&self, hidden: &[f32], token: u32) -> f32 {
          let token = (token as usize).min(self.config.vocab - 1);
@@ -504,7 +526,7 @@
      }
  
      fn attention(&self, q: &[f32], k: &[f32], v: &[f32], rows: usize, offset: usize) -> Vec<f32> {
-@@ -723,16 +782,11 @@
+@@ -723,16 +790,11 @@
      /// Only the cached prefix belongs to one session.
      model: Arc<SentenceModel>,
      cached: Option<(Vec<u32>, Prefix)>,
@@ -526,7 +548,7 @@
  }
  
  impl Reranker {
-@@ -741,6 +795,7 @@
+@@ -741,6 +803,7 @@
              model,
              cached: None,
              resume: Vec::new(),
@@ -534,7 +556,7 @@
          }
      }
  
-@@ -748,79 +803,57 @@
+@@ -748,79 +811,56 @@
          &self.model
      }
  
@@ -609,6 +631,10 @@
 -
 -    fn score(&mut self, context: &str, candidates: &[&str]) -> Vec<f32> {
 -        let longest = candidates
+-            .iter()
+-            .map(|text| text.chars().count())
+-            .max()
+-            .unwrap_or(0);
 +        reserve: usize,
 +    ) -> Result<(&Self, &Prefix), ModelError> {
 +        self.resume.truncate(self.ranked_len);
@@ -628,14 +654,10 @@
 +    /// Reuse a known nonempty path from the previous ranking under the prepared root.
 +    pub fn reuse_prefix(&self, text: &str) -> Option<Prefix> {
 +        let tokens = self.model.encode(text);
-+        let (_, run) = self
-+            .resume
-             .iter()
--            .map(|text| text.chars().count())
--            .max()
--            .unwrap_or(0);
-+            .rev()
-+            .find(|(previous, _)| previous.starts_with(&tokens))?;
++        let (_, run) = self.resume.iter().rev().find(|(previous, run)| {
++            previous.starts_with(&tokens)
++                && tokens.len() <= run.hidden.len() / self.model.config.n_embd
++        })?;
 +        Some(
 +            run.resume(tokens.len(), self.model.config.n_embd, &self.model)
 +                .0,
@@ -662,7 +684,7 @@
          // Keyed on the tokens rather than the context string, because two different contexts that
          // truncate to the same window are the same prefix and must not invalidate each other.
          let tokens = self.model.prefix_tokens(context, longest);
-@@ -833,11 +866,33 @@
+@@ -833,11 +873,33 @@
              self.cached = Some((tokens, prefix));
              // Every resume point hangs off the old prefix and means nothing against a new one.
              self.resume.clear();
@@ -698,7 +720,7 @@
          let mut scores = Vec::with_capacity(candidates.len());
          for text in candidates {
              let tail = self.model.encode(text);
-@@ -852,11 +907,31 @@
+@@ -852,77 +914,94 @@
                  .saturating_sub(prefix.length)
                  .max(1);
              let tail = &tail[..tail.len().min(limit)];
@@ -717,8 +739,9 @@
 +
 +            // A complete match needs neither a new last-token run nor a new output projection.
 +            if let Some((_, run)) = self
-+                .resume
-+                .iter()
+                 .resume
+                 .iter()
+-                .map(|(tokens, _)| {
 +                .rev()
 +                .chain(next.iter().rev())
 +                .find(|(tokens, _)| tokens.as_slice() == tail)
@@ -732,22 +755,29 @@
 +            // Complete matches were handled above; a partial match leaves at least one token
 +            // for run_tail, using the furthest-agreeing previous or current candidate.
 +            let previous = self
-                 .resume
-                 .iter()
-                 .map(|(tokens, _)| {
-@@ -869,60 +944,56 @@
++                .resume
++                .iter()
++                .map(|(tokens, run)| {
+                     let agreed = tokens
+                         .iter()
+                         .zip(tail)
+                         .take_while(|(left, right)| left == right)
+                         .count();
+-                    agreed.min(tail.len() - 1)
++                    agreed.min(tail.len() - 1).min(run.hidden.len() / n_embd)
                  })
                  .enumerate()
                  .max_by_key(|(_, agreed)| *agreed);
 +            let current = next
 +                .iter()
-+                .map(|(tokens, _)| {
++                .map(|(tokens, run)| {
 +                    tokens
 +                        .iter()
 +                        .zip(tail)
 +                        .take_while(|(left, right)| left == right)
 +                        .count()
 +                        .min(tail.len() - 1)
++                        .min(run.hidden.len() / n_embd)
 +                })
 +                .enumerate()
 +                .max_by_key(|(_, agreed)| *agreed);
@@ -836,7 +866,7 @@
      }
  }
  
-@@ -956,14 +1027,184 @@
+@@ -956,14 +1035,184 @@
  fn linear(x: &[f32], w: &Matrix, bias: &[f32], inputs: usize, outputs: usize) -> Vec<f32> {
      let rows = x.len() / inputs;
      let mut out = vec![0.0; rows * outputs];
@@ -1026,7 +1056,7 @@
  }
  
  /// The quantized counterpart of `dot`, with the same eight independent accumulators and the same
-@@ -1036,76 +1277,503 @@
+@@ -1036,76 +1285,565 @@
  
  #[cfg(test)]
  mod tests {
@@ -1216,7 +1246,8 @@
 +                .collect::<Vec<_>>()
          };
 -        assert_eq!(comparable(3, &trailing), Some(vec![0, 1, 2]));
-+        for text in ["我", "我今", "我今天", "我今天去上班"] {
++        assert!(prepared.reuse_prefix("我今天去上班").is_none());
++        for text in ["我", "我今", "我今天"] {
 +            let reused = prepared.reuse_prefix(text).unwrap();
 +            let mut fresh = None;
 +            for character in text.chars() {
@@ -1256,6 +1287,38 @@
 -    fn a_leader_that_does_not_answer_the_key_declines_the_decision() {
 -        // Promoting over a prefix would compare readings of two different keys.
 -        assert_eq!(comparable(3, &answering(&[false, true, true])), None);
++    fn a_scored_last_token_is_advanced_before_becoming_a_search_parent() {
++        let mut scorer = reranker();
++        let candidates = ["我们", "我们去", "我们来", "我们"];
++        let expected = reranker().log_probabilities("昨天", &candidates);
++        let actual = scorer.log_probabilities("昨天", &candidates);
++        assert_eq!(actual, expected);
++        // Retain only the short complete score, whose last character has no state.
++        scorer.log_probabilities("昨天", &["我们"]);
++        let parent = {
++            let (prepared, _) = scorer.prefix("昨天", 3).unwrap();
++            assert!(prepared.reuse_prefix("我们").is_none());
++            let first = prepared.reuse_prefix("我").unwrap();
++            prepared
++                .model()
++                .advance(&[(&first, '们')])
++                .unwrap()
++                .remove(0)
++        };
++        scorer.retain_search_prefixes(vec![("我们".into(), parent)]);
++        let candidates = ["我们去", "我们来"];
++        let actual = scorer.log_probabilities("昨天", &candidates);
++        let expected = reranker().log_probabilities("昨天", &candidates);
++        for (actual, expected) in actual.iter().zip(expected) {
++            assert!((actual - expected).abs() <= 1e-5);
++        }
+     }
+ 
+     #[test]
+-    fn fewer_than_two_comparable_candidates_declines_the_decision() {
+-        assert_eq!(comparable(0, &answering(&[])), None);
+-        assert_eq!(comparable(1, &answering(&[true])), None);
+-        assert_eq!(comparable(3, &answering(&[true, false, false])), None);
 +    fn independent_branches_keep_single_step_bits() {
 +        let mut scorer = reranker();
 +        let (prepared, root) = scorer.prefix("昨天", 6).unwrap();
@@ -1273,19 +1336,24 @@
 +        ];
 +        let actual = model.advance(&branches).unwrap();
 +        for ((prefix, character), actual) in branches.iter().zip(actual) {
-+            let run = model.run_tail(prefix, &[model.index[character]]);
-+            let expected = model.distribution(&run.hidden);
++            let expected = model.advance(&[(prefix, *character)]).unwrap().remove(0);
 +            assert_eq!(actual.length, prefix.length + 1);
-+            for (actual, expected) in actual.keys.iter().flatten().zip(run.keys.iter().flatten()) {
-+                assert_eq!(actual.to_bits(), expected.to_bits());
-+            }
-+            for (actual, expected) in actual
-+                .values
-+                .iter()
-+                .flatten()
-+                .zip(run.values.iter().flatten())
-+            {
-+                assert_eq!(actual.to_bits(), expected.to_bits());
++            for (actual, expected) in [
++                (&actual.keys, &expected.keys),
++                (&actual.values, &expected.values),
++            ] {
++                assert_eq!(
++                    actual
++                        .iter()
++                        .flatten()
++                        .map(|x| x.to_bits())
++                        .collect::<Vec<_>>(),
++                    expected
++                        .iter()
++                        .flatten()
++                        .map(|x| x.to_bits())
++                        .collect::<Vec<_>>()
++                );
 +            }
 +            assert_eq!(
 +                actual
@@ -1293,16 +1361,21 @@
 +                    .iter()
 +                    .map(|x| x.to_bits())
 +                    .collect::<Vec<_>>(),
-+                expected.iter().map(|x| x.to_bits()).collect::<Vec<_>>()
++                expected
++                    .last_distribution
++                    .iter()
++                    .map(|x| x.to_bits())
++                    .collect::<Vec<_>>()
 +            );
 +        }
      }
  
      #[test]
--    fn fewer_than_two_comparable_candidates_declines_the_decision() {
--        assert_eq!(comparable(0, &answering(&[])), None);
--        assert_eq!(comparable(1, &answering(&[true])), None);
--        assert_eq!(comparable(3, &answering(&[true, false, false])), None);
+-    fn the_comparison_is_capped_and_keeps_the_leader() {
+-        let flags = [true; 12];
+-        let considered = comparable(12, &answering(&flags)).expect("all answer the key");
+-        assert_eq!(considered.len(), super::COMPARED);
+-        assert_eq!(considered[0], 0);
 +    fn batched_quantized_dots_match_single_rows() {
 +        let width = 192;
 +        let rows = 17;
@@ -1343,11 +1416,15 @@
      }
  
      #[test]
--    fn the_comparison_is_capped_and_keeps_the_leader() {
--        let flags = [true; 12];
--        let considered = comparable(12, &answering(&flags)).expect("all answer the key");
--        assert_eq!(considered.len(), super::COMPARED);
--        assert_eq!(considered[0], 0);
+-    fn gate_follows_the_leading_candidate_only() {
+-        // Database and UserDatabase lead: the dictionary knows the whole key, leave it alone.
+-        assert!(!should_rerank(&[0, 8, 9]));
+-        assert!(!should_rerank(&[1, 8]));
+-        // Lattice or fallback leads: no frequency evidence, so the model is worth consulting.
+-        assert!(should_rerank(&[8, 0, 0]));
+-        assert!(should_rerank(&[9, 0]));
+-        // Nothing to reorder.
+-        assert!(!should_rerank(&[]));
 +    fn matrix_batches_preserve_single_row_bits_and_bias() {
 +        for (width, outputs) in [
 +            (192_usize, 17_usize),
@@ -1418,42 +1495,57 @@
 +                }
 +            }
 +        }
-     }
- 
-     #[test]
--    fn gate_follows_the_leading_candidate_only() {
--        // Database and UserDatabase lead: the dictionary knows the whole key, leave it alone.
--        assert!(!should_rerank(&[0, 8, 9]));
--        assert!(!should_rerank(&[1, 8]));
--        // Lattice or fallback leads: no frequency evidence, so the model is worth consulting.
--        assert!(should_rerank(&[8, 0, 0]));
--        assert!(should_rerank(&[9, 0]));
--        // Nothing to reorder.
--        assert!(!should_rerank(&[]));
++    }
++
++    #[test]
 +    fn tail_cumulative_matches_serial_distributions_bit_for_bit() {
 +        let scorer = reranker();
 +        let model = scorer.model();
 +        let tokens = model.encode("我今天去上班回来");
++        let characters: Vec<_> = "我今天去上班回来".chars().collect();
 +        for context in ["", "昨天", "医生调整了药物的"] {
 +            let prefix = model.run_prefix(&model.prefix_tokens(context, tokens.len()));
 +            for length in 1..=tokens.len() {
 +                let tail = &tokens[..length];
 +                let run = model.run_tail(&prefix, tail);
-+                assert_eq!(run.hidden.len(), length * model.config.n_embd);
++                assert_eq!(run.hidden.len(), (length - 1) * model.config.n_embd);
 +                assert_eq!(run.cumulative.len(), length);
-+                let mut expected = prefix.last_distribution[tail[0] as usize];
-+                assert_eq!(run.cumulative[0].to_bits(), expected.to_bits());
-+                for (step, (&token, row)) in tail[1..]
-+                    .iter()
-+                    .zip(run.hidden.chunks_exact(model.config.n_embd))
-+                    .enumerate()
-+                {
-+                    expected += model.distribution(row)[token as usize];
++                let mut expected = 0.0;
++                let mut state = None;
++                for (step, &token) in tail.iter().enumerate() {
++                    let parent = state.as_ref().unwrap_or(&prefix);
++                    expected += parent.last_distribution[token as usize];
 +                    assert_eq!(
-+                        run.cumulative[step + 1].to_bits(),
++                        run.cumulative[step].to_bits(),
 +                        expected.to_bits(),
-+                        "context={context:?}, length={length}, step={}",
-+                        step + 1
++                        "context={context:?}, length={length}, step={step}"
++                    );
++                    if step + 1 < length {
++                        state = Some(
++                            model
++                                .advance(&[(parent, characters[step])])
++                                .unwrap()
++                                .remove(0),
++                        );
++                    }
++                }
++                let expected_state = state.as_ref().unwrap_or(&prefix);
++                assert_eq!(expected_state.length, prefix.length + length - 1);
++                for (actual, expected) in [
++                    (&run.keys, &expected_state.keys),
++                    (&run.values, &expected_state.values),
++                ] {
++                    assert_eq!(
++                        actual
++                            .iter()
++                            .flatten()
++                            .map(|x| x.to_bits())
++                            .collect::<Vec<_>>(),
++                        expected
++                            .iter()
++                            .flatten()
++                            .map(|x| x.to_bits())
++                            .collect::<Vec<_>>()
 +                    );
 +                }
 +            }

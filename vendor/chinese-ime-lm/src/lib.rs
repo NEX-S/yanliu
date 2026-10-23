@@ -621,14 +621,26 @@ impl SentenceModel {
         run.cumulative[run.cumulative.len() - 1]
     }
 
-    /// Runs a candidate, retaining keys, values and normalized hidden rows at every position so
-    /// later candidates can resume at any shared prefix.
+    /// Retains the states needed to score a candidate. Its last token only needs the preceding
+    /// state, so leave it unadvanced; later candidates can resume before that token.
     ///
     /// Resuming adds a carried score to each new local cumulative sum. Keep this grouping: f32
     /// addition cannot be reassociated without changing score bits.
     fn run_tail(&self, prefix: &Prefix, tail: &[u32]) -> TailRun {
         let n_embd = self.config.n_embd;
-        let mut x = self.embed(tail, prefix.length);
+        let advanced = tail.len() - 1;
+        let first_token = (tail[0] as usize).min(self.config.vocab - 1);
+        if advanced == 0 {
+            return TailRun {
+                base: prefix.length,
+                keys: prefix.keys.clone(),
+                values: prefix.values.clone(),
+                hidden: Vec::new(),
+                cumulative: vec![prefix.last_distribution[first_token]],
+                last_distribution: None,
+            };
+        }
+        let mut x = self.embed(&tail[..advanced], prefix.length);
         let mut keys_out = Vec::with_capacity(self.blocks.len());
         let mut values_out = Vec::with_capacity(self.blocks.len());
         for (layer, block) in self.blocks.iter().enumerate() {
@@ -640,14 +652,14 @@ impl SentenceModel {
                 n_embd,
                 3 * n_embd,
             );
-            let (q, k, v) = split_qkv(&qkv, tail.len(), n_embd);
+            let (q, k, v) = split_qkv(&qkv, advanced, n_embd);
             let mut keys = Vec::with_capacity(prefix.keys[layer].len() + k.len());
             let mut values = Vec::with_capacity(prefix.values[layer].len() + v.len());
             keys.extend_from_slice(&prefix.keys[layer]);
             values.extend_from_slice(&prefix.values[layer]);
             keys.extend_from_slice(&k);
             values.extend_from_slice(&v);
-            let attended = self.attention(&q, &keys, &values, tail.len(), prefix.length);
+            let attended = self.attention(&q, &keys, &values, advanced, prefix.length);
             let projected = linear(
                 &attended,
                 &block.proj_weight,
@@ -666,16 +678,12 @@ impl SentenceModel {
 
         // Position i predicts token i + 1. The opening character is therefore predicted by the last
         // prefix position, and every later one by the tail position before it.
-        let first_token = (tail[0] as usize).min(self.config.vocab - 1);
         let mut running = prefix.last_distribution[first_token];
         let mut cumulative = Vec::with_capacity(tail.len());
         cumulative.push(running);
-        for step in 0..tail.len() {
-            let row = &normed[step * n_embd..(step + 1) * n_embd];
-            if step + 1 < tail.len() {
-                running += self.log_probability(row, tail[step + 1]);
-                cumulative.push(running);
-            }
+        for (step, row) in normed.chunks_exact(n_embd).enumerate() {
+            running += self.log_probability(row, tail[step + 1]);
+            cumulative.push(running);
         }
         TailRun {
             base: prefix.length,
@@ -826,11 +834,10 @@ impl Reranker {
     /// Reuse a known nonempty path from the previous ranking under the prepared root.
     pub fn reuse_prefix(&self, text: &str) -> Option<Prefix> {
         let tokens = self.model.encode(text);
-        let (_, run) = self
-            .resume
-            .iter()
-            .rev()
-            .find(|(previous, _)| previous.starts_with(&tokens))?;
+        let (_, run) = self.resume.iter().rev().find(|(previous, run)| {
+            previous.starts_with(&tokens)
+                && tokens.len() <= run.hidden.len() / self.model.config.n_embd
+        })?;
         Some(
             run.resume(tokens.len(), self.model.config.n_embd, &self.model)
                 .0,
@@ -934,25 +941,26 @@ impl Reranker {
             let previous = self
                 .resume
                 .iter()
-                .map(|(tokens, _)| {
+                .map(|(tokens, run)| {
                     let agreed = tokens
                         .iter()
                         .zip(tail)
                         .take_while(|(left, right)| left == right)
                         .count();
-                    agreed.min(tail.len() - 1)
+                    agreed.min(tail.len() - 1).min(run.hidden.len() / n_embd)
                 })
                 .enumerate()
                 .max_by_key(|(_, agreed)| *agreed);
             let current = next
                 .iter()
-                .map(|(tokens, _)| {
+                .map(|(tokens, run)| {
                     tokens
                         .iter()
                         .zip(tail)
                         .take_while(|(left, right)| left == right)
                         .count()
                         .min(tail.len() - 1)
+                        .min(run.hidden.len() / n_embd)
                 })
                 .enumerate()
                 .max_by_key(|(_, agreed)| *agreed);
@@ -1436,7 +1444,8 @@ mod tests {
                 .map(|row| row.iter().map(|x| x.to_bits()).collect::<Vec<_>>())
                 .collect::<Vec<_>>()
         };
-        for text in ["我", "我今", "我今天", "我今天去上班"] {
+        assert!(prepared.reuse_prefix("我今天去上班").is_none());
+        for text in ["我", "我今", "我今天"] {
             let reused = prepared.reuse_prefix(text).unwrap();
             let mut fresh = None;
             for character in text.chars() {
@@ -1473,6 +1482,34 @@ mod tests {
     }
 
     #[test]
+    fn a_scored_last_token_is_advanced_before_becoming_a_search_parent() {
+        let mut scorer = reranker();
+        let candidates = ["我们", "我们去", "我们来", "我们"];
+        let expected = reranker().log_probabilities("昨天", &candidates);
+        let actual = scorer.log_probabilities("昨天", &candidates);
+        assert_eq!(actual, expected);
+        // Retain only the short complete score, whose last character has no state.
+        scorer.log_probabilities("昨天", &["我们"]);
+        let parent = {
+            let (prepared, _) = scorer.prefix("昨天", 3).unwrap();
+            assert!(prepared.reuse_prefix("我们").is_none());
+            let first = prepared.reuse_prefix("我").unwrap();
+            prepared
+                .model()
+                .advance(&[(&first, '们')])
+                .unwrap()
+                .remove(0)
+        };
+        scorer.retain_search_prefixes(vec![("我们".into(), parent)]);
+        let candidates = ["我们去", "我们来"];
+        let actual = scorer.log_probabilities("昨天", &candidates);
+        let expected = reranker().log_probabilities("昨天", &candidates);
+        for (actual, expected) in actual.iter().zip(expected) {
+            assert!((actual - expected).abs() <= 1e-5);
+        }
+    }
+
+    #[test]
     fn independent_branches_keep_single_step_bits() {
         let mut scorer = reranker();
         let (prepared, root) = scorer.prefix("昨天", 6).unwrap();
@@ -1490,19 +1527,24 @@ mod tests {
         ];
         let actual = model.advance(&branches).unwrap();
         for ((prefix, character), actual) in branches.iter().zip(actual) {
-            let run = model.run_tail(prefix, &[model.index[character]]);
-            let expected = model.distribution(&run.hidden);
+            let expected = model.advance(&[(prefix, *character)]).unwrap().remove(0);
             assert_eq!(actual.length, prefix.length + 1);
-            for (actual, expected) in actual.keys.iter().flatten().zip(run.keys.iter().flatten()) {
-                assert_eq!(actual.to_bits(), expected.to_bits());
-            }
-            for (actual, expected) in actual
-                .values
-                .iter()
-                .flatten()
-                .zip(run.values.iter().flatten())
-            {
-                assert_eq!(actual.to_bits(), expected.to_bits());
+            for (actual, expected) in [
+                (&actual.keys, &expected.keys),
+                (&actual.values, &expected.values),
+            ] {
+                assert_eq!(
+                    actual
+                        .iter()
+                        .flatten()
+                        .map(|x| x.to_bits())
+                        .collect::<Vec<_>>(),
+                    expected
+                        .iter()
+                        .flatten()
+                        .map(|x| x.to_bits())
+                        .collect::<Vec<_>>()
+                );
             }
             assert_eq!(
                 actual
@@ -1510,7 +1552,11 @@ mod tests {
                     .iter()
                     .map(|x| x.to_bits())
                     .collect::<Vec<_>>(),
-                expected.iter().map(|x| x.to_bits()).collect::<Vec<_>>()
+                expected
+                    .last_distribution
+                    .iter()
+                    .map(|x| x.to_bits())
+                    .collect::<Vec<_>>()
             );
         }
     }
@@ -1633,26 +1679,50 @@ mod tests {
         let scorer = reranker();
         let model = scorer.model();
         let tokens = model.encode("我今天去上班回来");
+        let characters: Vec<_> = "我今天去上班回来".chars().collect();
         for context in ["", "昨天", "医生调整了药物的"] {
             let prefix = model.run_prefix(&model.prefix_tokens(context, tokens.len()));
             for length in 1..=tokens.len() {
                 let tail = &tokens[..length];
                 let run = model.run_tail(&prefix, tail);
-                assert_eq!(run.hidden.len(), length * model.config.n_embd);
+                assert_eq!(run.hidden.len(), (length - 1) * model.config.n_embd);
                 assert_eq!(run.cumulative.len(), length);
-                let mut expected = prefix.last_distribution[tail[0] as usize];
-                assert_eq!(run.cumulative[0].to_bits(), expected.to_bits());
-                for (step, (&token, row)) in tail[1..]
-                    .iter()
-                    .zip(run.hidden.chunks_exact(model.config.n_embd))
-                    .enumerate()
-                {
-                    expected += model.distribution(row)[token as usize];
+                let mut expected = 0.0;
+                let mut state = None;
+                for (step, &token) in tail.iter().enumerate() {
+                    let parent = state.as_ref().unwrap_or(&prefix);
+                    expected += parent.last_distribution[token as usize];
                     assert_eq!(
-                        run.cumulative[step + 1].to_bits(),
+                        run.cumulative[step].to_bits(),
                         expected.to_bits(),
-                        "context={context:?}, length={length}, step={}",
-                        step + 1
+                        "context={context:?}, length={length}, step={step}"
+                    );
+                    if step + 1 < length {
+                        state = Some(
+                            model
+                                .advance(&[(parent, characters[step])])
+                                .unwrap()
+                                .remove(0),
+                        );
+                    }
+                }
+                let expected_state = state.as_ref().unwrap_or(&prefix);
+                assert_eq!(expected_state.length, prefix.length + length - 1);
+                for (actual, expected) in [
+                    (&run.keys, &expected_state.keys),
+                    (&run.values, &expected_state.values),
+                ] {
+                    assert_eq!(
+                        actual
+                            .iter()
+                            .flatten()
+                            .map(|x| x.to_bits())
+                            .collect::<Vec<_>>(),
+                        expected
+                            .iter()
+                            .flatten()
+                            .map(|x| x.to_bits())
+                            .collect::<Vec<_>>()
                     );
                 }
             }
