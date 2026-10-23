@@ -128,7 +128,7 @@ impl Decoder {
                 }
             }
             let mut prefixes = Vec::with_capacity(continuing.len());
-            for chunk in continuing.chunks(2) {
+            for chunk in continuing.chunks(4) {
                 if !still_current() {
                     return Ok(None);
                 }

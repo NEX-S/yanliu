@@ -61,8 +61,29 @@ impl Matrix {
 
     fn write_gemm(&self, x: &[f32], width: usize, outputs: usize, out: &mut [f32]) {
         if let Tensor::Quantized { values, scales } = &self.inner {
-            let pairs = x.len() / width / 2;
-            for pair in 0..pairs {
+            let batch = x.len() / width;
+            let quads = batch / 4;
+            for quad in 0..quads {
+                let source = &x[quad * 4 * width..(quad + 1) * 4 * width];
+                let target = &mut out[quad * 4 * outputs..(quad + 1) * 4 * outputs];
+                let (first, rest) = target.split_at_mut(outputs);
+                let (second, rest) = rest.split_at_mut(outputs);
+                let (third, fourth) = rest.split_at_mut(outputs);
+                quantized_gemv_quad(
+                    [
+                        &source[..width],
+                        &source[width..2 * width],
+                        &source[2 * width..3 * width],
+                        &source[3 * width..],
+                    ],
+                    values,
+                    scales,
+                    width,
+                    [first, second, third, fourth],
+                );
+            }
+            let pairs = batch / 2;
+            for pair in quads * 2..pairs {
                 let source = &x[pair * 2 * width..(pair + 1) * 2 * width];
                 let target = &mut out[pair * 2 * outputs..(pair + 1) * 2 * outputs];
                 let (first, second) = target.split_at_mut(outputs);
@@ -74,7 +95,7 @@ impl Matrix {
                     [first, second],
                 );
             }
-            if x.len() / width % 2 != 0 {
+            if batch % 2 != 0 {
                 self.write_gemv(
                     &x[pairs * 2 * width..],
                     width,
@@ -1215,6 +1236,86 @@ fn quantized_gemv_pair(
     }
 }
 
+// Four inputs share two output rows, keeping eight independent vector accumulators.
+fn dot4x2(x: [&[f32]; 4], rows: [&[i8]; 2]) -> [[f32; 2]; 4] {
+    const LANES: usize = 8;
+    let mut p00 = [0.0f32; LANES];
+    let mut p01 = [0.0f32; LANES];
+    let mut p10 = [0.0f32; LANES];
+    let mut p11 = [0.0f32; LANES];
+    let mut p20 = [0.0f32; LANES];
+    let mut p21 = [0.0f32; LANES];
+    let mut p30 = [0.0f32; LANES];
+    let mut p31 = [0.0f32; LANES];
+    let n = x[0].len() / LANES;
+    for chunk in 0..n {
+        let at = chunk * LANES;
+        let x0 = &x[0][at..at + LANES];
+        let x1 = &x[1][at..at + LANES];
+        let x2 = &x[2][at..at + LANES];
+        let x3 = &x[3][at..at + LANES];
+        let y0 = &rows[0][at..at + LANES];
+        let y1 = &rows[1][at..at + LANES];
+        for lane in 0..LANES {
+            let y0 = f32::from(y0[lane]);
+            let y1 = f32::from(y1[lane]);
+            p00[lane] += x0[lane] * y0;
+            p01[lane] += x0[lane] * y1;
+            p10[lane] += x1[lane] * y0;
+            p11[lane] += x1[lane] * y1;
+            p20[lane] += x2[lane] * y0;
+            p21[lane] += x2[lane] * y1;
+            p30[lane] += x3[lane] * y0;
+            p31[lane] += x3[lane] * y1;
+        }
+    }
+    let mut totals = [
+        [sum_lanes(p00), sum_lanes(p01)],
+        [sum_lanes(p10), sum_lanes(p11)],
+        [sum_lanes(p20), sum_lanes(p21)],
+        [sum_lanes(p30), sum_lanes(p31)],
+    ];
+    for index in n * LANES..x[0].len() {
+        for (row, weight) in rows.iter().enumerate() {
+            let weight = f32::from(weight[index]);
+            for source in 0..4 {
+                totals[source][row] += x[source][index] * weight;
+            }
+        }
+    }
+    totals
+}
+
+fn quantized_gemv_quad(
+    x: [&[f32]; 4],
+    values: &[i8],
+    scales: &[f32],
+    width: usize,
+    out: [&mut [f32]; 4],
+) {
+    let [first, second, third, fourth] = out;
+    let rows = first.len();
+    let mut row = 0;
+    while row + 2 <= rows {
+        let at = |offset: usize| &values[(row + offset) * width..(row + offset + 1) * width];
+        let dots = dot4x2(x, [at(0), at(1)]);
+        for offset in 0..2 {
+            first[row + offset] = dots[0][offset] * scales[row + offset];
+            second[row + offset] = dots[1][offset] * scales[row + offset];
+            third[row + offset] = dots[2][offset] * scales[row + offset];
+            fourth[row + offset] = dots[3][offset] * scales[row + offset];
+        }
+        row += 2;
+    }
+    if row < rows {
+        let weights = &values[row * width..(row + 1) * width];
+        first[row] = dot_i8(x[0], weights) * scales[row];
+        second[row] = dot_i8(x[1], weights) * scales[row];
+        third[row] = dot_i8(x[2], weights) * scales[row];
+        fourth[row] = dot_i8(x[3], weights) * scales[row];
+    }
+}
+
 /// The quantized counterpart of `dot`, with the same eight independent accumulators and the same
 /// reason for them. The row's scale is applied by the caller, once, rather than to every value:
 /// that is the whole point of keeping the weights as `i8`.
@@ -1609,6 +1710,7 @@ mod tests {
             (195, 7),
             (771, 5),
             (192, 9358),
+            (448, 17),
         ] {
             let values: Vec<i8> = (0..width * outputs)
                 .map(|index| (index * 17).wrapping_sub(40) as i8)
@@ -1634,7 +1736,7 @@ mod tests {
                     )
                 };
                 let matrix = super::Matrix { inner };
-                for batch in [0, 1, 2, 3, 7, 12] {
+                for batch in [0, 1, 2, 3, 4, 5, 6, 7, 12] {
                     let x: Vec<f32> = (0..batch * width)
                         .map(|index| ((index * 37 % 251) as f32 - 125.0) / 13.0)
                         .collect();
