@@ -233,10 +233,11 @@ def text_teacher_kl(student_logits, teacher_logits, targets, torch):
         teacher_logits[valid].float().softmax(-1), reduction="batchmean")
 
 
-def export_model(model, metadata, parent_sha, binding, output, epoch, steps, torch, save_file):
+def export_model(model, metadata, runtime, parent_sha, binding, output, epoch, steps, torch, save_file):
     inherited = dict(metadata)
     inherited.update(parent_model_sha256=parent_sha, training_recipe_sha256=binding,
-                     additional_optimizer_steps=str(steps), ranking_epoch=str(epoch))
+                     additional_optimizer_steps=str(steps), ranking_epoch=str(epoch),
+                     training_device=runtime["device"], training_precision=runtime["precision"])
     floats, quantized = {}, {}
     for name, parameter in model.state_dict().items():
         if name == "head.weight":
@@ -448,8 +449,8 @@ def main():
     del train_report, train
     if not groups and args.epochs:
         raise ValueError("no trainable candidate groups; see training-data.json")
-    initial_artifacts = export_model(model, metadata, recipe["initial_model_sha256"], recipe_sha,
-                                     args.output_dir, 0, 0, torch, save_file)
+    initial_artifacts = export_model(model, metadata, recipe["runtime"], recipe["initial_model_sha256"],
+                                     recipe_sha, args.output_dir, 0, 0, torch, save_file)
     initial_report, initial_command = cli_evaluate(
         args.binary, args.dev, args.output_dir / "dev-initial.json", initial_artifacts["int8"]["path"])
     static_report, static_command = cli_evaluate(
@@ -527,8 +528,8 @@ def main():
                              "text_effective_targets": text_tokens,
                              "optimizer_steps": steps, "seconds": time.monotonic() - started})
         if epoch:
-            artifacts = export_model(model, metadata, recipe["initial_model_sha256"], recipe_sha,
-                                     args.output_dir, epoch, steps, torch, save_file)
+            artifacts = export_model(model, metadata, recipe["runtime"], recipe["initial_model_sha256"],
+                                     recipe_sha, args.output_dir, epoch, steps, torch, save_file)
             report, command = cli_evaluate(args.binary, args.dev,
                 args.output_dir / f"dev-epoch{epoch:02d}.json", artifacts["int8"]["path"])
         else:

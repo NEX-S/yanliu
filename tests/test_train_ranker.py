@@ -633,8 +633,8 @@ class TrainingTensorTests(unittest.TestCase):
         metadata = {"format": "chinese-ime-lm", "license": "GPL-3.0-or-later",
                     "attribution": "public fixture"}
         with tempfile.TemporaryDirectory(prefix="train-ranker-test-", dir=TEST_CACHE) as directory:
-            artifacts = TRAIN.export_model(model, metadata, "parent", "recipe", Path(directory),
-                                           0, 0, torch, save_file)
+            artifacts = TRAIN.export_model(model, metadata, {"device": "cpu", "precision": "fp32"},
+                                           "parent", "recipe", Path(directory), 0, 0, torch, save_file)
             for precision in ["f32", "int8"]:
                 with safe_open(artifacts[precision]["path"], framework="pt") as artifact:
                     actual = artifact.metadata()
@@ -646,6 +646,32 @@ class TrainingTensorTests(unittest.TestCase):
                     self.assertNotIn("training_steps", actual)
             self.assertEqual(metadata, {"format": "chinese-ime-lm", "license": "GPL-3.0-or-later",
                                         "attribution": "public fixture"})
+
+    def test_export_uses_current_runtime_without_mutating_parent_metadata(self):
+        model = torch.nn.Linear(2, 2)
+        metadata = {"format": "chinese-ime-lm", "license": "GPL-3.0-or-later",
+                    "attribution": "public fixture", "provenance": '{"source": "public fixture"}',
+                    "config": '{"n_embd": 2}', "precision": "int8",
+                    "training_device": "xpu", "training_precision": "bf16"}
+        parent_metadata = dict(metadata)
+        recipe = {"model_metadata": metadata, "runtime": {"device": "cpu", "precision": "fp32"}}
+        with tempfile.TemporaryDirectory(prefix="train-ranker-test-", dir=TEST_CACHE) as directory:
+            artifacts = TRAIN.export_model(model, metadata, recipe["runtime"], "parent", "recipe",
+                                           Path(directory), 2, 4, torch, save_file)
+            for precision in ["f32", "int8"]:
+                with self.subTest(precision=precision):
+                    with safe_open(artifacts[precision]["path"], framework="pt") as artifact:
+                        actual = artifact.metadata()
+                        self.assertEqual(actual["training_device"], "cpu")
+                        self.assertEqual(actual["training_precision"], "fp32")
+                        self.assertEqual(actual["precision"], precision)
+                        for key in ["format", "license", "attribution", "provenance", "config"]:
+                            self.assertEqual(actual[key], metadata[key])
+                        self.assertEqual(actual["parent_model_sha256"], "parent")
+                        self.assertEqual(actual["training_recipe_sha256"], "recipe")
+                        self.assertEqual(actual["additional_optimizer_steps"], "4")
+                        self.assertEqual(actual["ranking_epoch"], "2")
+            self.assertEqual(recipe["model_metadata"], parent_metadata)
 
 
 if __name__ == "__main__":
