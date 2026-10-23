@@ -164,10 +164,24 @@ impl Learning {
         context: &str,
         candidates: impl IntoIterator<Item = &'a Candidate>,
     ) -> Vec<f32> {
+        let candidates = candidates.into_iter();
+        {
+            let state = self.lock();
+            if state.adapter.is_none()
+                || !state
+                    .counts
+                    .range((input.to_owned(), String::new())..)
+                    .next()
+                    .is_some_and(|((raw, _), _)| raw == input)
+            {
+                drop(state);
+                return candidates.map(|_| 0.0).collect();
+            }
+        }
         let rows: Vec<_> = candidates
-            .into_iter()
             .map(|c| features(&input[..c.consumed], context, &c.text))
             .collect();
+        // A concurrent choice may change parameters or evict this input during feature work.
         let state = self.lock();
         let Some(adapter) = &state.adapter else {
             return vec![0.0; rows.len()];
