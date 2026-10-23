@@ -227,8 +227,8 @@ struct TailRun {
     hidden: Vec<f32>,
     /// Log-probability of the run's first `i + 1` tokens, summed left to right.
     cumulative: Vec<f32>,
-    /// Search already projects its final state; retain that result for a complete resume.
-    last_distribution: Option<Vec<f32>>,
+    /// Distribution at the last retained hidden row, or at `base` when there are no new rows.
+    last_distribution: Vec<f32>,
 }
 
 impl TailRun {
@@ -238,9 +238,10 @@ impl TailRun {
     /// leading part of the one already held.
     fn resume(&self, taken: usize, n_embd: usize, model: &SentenceModel) -> (Prefix, f32) {
         let width = (self.base + taken) * n_embd;
-        let last_distribution = match &self.last_distribution {
-            Some(distribution) if taken == self.cumulative.len() => distribution.clone(),
-            _ => model.distribution(&self.hidden[(taken - 1) * n_embd..taken * n_embd]),
+        let last_distribution = if taken == self.hidden.len() / n_embd {
+            self.last_distribution.clone()
+        } else {
+            model.distribution(&self.hidden[(taken - 1) * n_embd..taken * n_embd])
         };
         (
             Prefix {
@@ -658,7 +659,7 @@ impl SentenceModel {
                 values: prefix.values.clone(),
                 hidden: Vec::new(),
                 cumulative: vec![prefix.last_distribution[first_token]],
-                last_distribution: None,
+                last_distribution: prefix.last_distribution.clone(),
             };
         }
         let mut x = self.embed(&tail[..advanced], prefix.length);
@@ -702,17 +703,22 @@ impl SentenceModel {
         let mut running = prefix.last_distribution[first_token];
         let mut cumulative = Vec::with_capacity(tail.len());
         cumulative.push(running);
-        for (step, row) in normed.chunks_exact(n_embd).enumerate() {
+        let last = (advanced - 1) * n_embd;
+        for (step, row) in normed[..last].chunks_exact(n_embd).enumerate() {
             running += self.log_probability(row, tail[step + 1]);
             cumulative.push(running);
         }
+        let last_distribution = self.distribution(&normed[last..]);
+        let last_token = (tail[advanced] as usize).min(self.config.vocab - 1);
+        running += last_distribution[last_token];
+        cumulative.push(running);
         TailRun {
             base: prefix.length,
             keys: keys_out,
             values: values_out,
             hidden: normed,
             cumulative,
-            last_distribution: None,
+            last_distribution,
         }
     }
 
@@ -875,7 +881,7 @@ impl Reranker {
                     values: prefix.values,
                     hidden: prefix.hidden,
                     cumulative: prefix.cumulative,
-                    last_distribution: Some(prefix.last_distribution),
+                    last_distribution: prefix.last_distribution,
                 };
                 (self.model.encode(&text), Arc::new(run))
             }));
@@ -1810,6 +1816,24 @@ mod tests {
                 }
                 let expected_state = state.as_ref().unwrap_or(&prefix);
                 assert_eq!(expected_state.length, prefix.length + length - 1);
+                assert_eq!(
+                    run.last_distribution
+                        .iter()
+                        .map(|value| value.to_bits())
+                        .collect::<Vec<_>>(),
+                    expected_state
+                        .last_distribution
+                        .iter()
+                        .map(|value| value.to_bits())
+                        .collect::<Vec<_>>()
+                );
+                if let Some(row) = run.hidden.chunks_exact(model.config.n_embd).last() {
+                    let token = *tail.last().unwrap();
+                    assert_eq!(
+                        model.log_probability(row, token).to_bits(),
+                        run.last_distribution[token as usize].to_bits()
+                    );
+                }
                 for (actual, expected) in [
                     (&run.keys, &expected_state.keys),
                     (&run.values, &expected_state.values),
@@ -1826,6 +1850,47 @@ mod tests {
                             .map(|x| x.to_bits())
                             .collect::<Vec<_>>()
                     );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn joined_runs_resume_at_the_actual_last_hidden_and_interior_positions() {
+        let scorer = reranker();
+        let model = scorer.model();
+        let n_embd = model.config.n_embd;
+        let original = model.encode("我今天去上班");
+        let prefix = model.run_prefix(&model.prefix_tokens("昨天", original.len()));
+        let run = model.run_tail(&prefix, &original);
+        for suffix in ["来", "回来了"] {
+            let (from, carried) = run.resume(3, n_embd, model);
+            let rest = model.run_tail(&from, &model.encode(suffix));
+            let joined = run.joined(3, n_embd, carried, rest);
+            let last = joined.hidden.len() / n_embd;
+            for taken in [1, 3, last] {
+                let (resumed, score) = joined.resume(taken, n_embd, model);
+                let expected =
+                    model.distribution(&joined.hidden[(taken - 1) * n_embd..taken * n_embd]);
+                assert_eq!(
+                    resumed
+                        .last_distribution
+                        .iter()
+                        .map(|value| value.to_bits())
+                        .collect::<Vec<_>>(),
+                    expected
+                        .iter()
+                        .map(|value| value.to_bits())
+                        .collect::<Vec<_>>(),
+                    "suffix={suffix}, taken={taken}"
+                );
+                assert_eq!(score.to_bits(), joined.cumulative[taken - 1].to_bits());
+                assert_eq!(resumed.length, joined.base + taken);
+                for (actual, expected) in resumed.keys.iter().zip(&joined.keys) {
+                    assert_eq!(actual, &expected[..(joined.base + taken) * n_embd]);
+                }
+                for (actual, expected) in resumed.values.iter().zip(&joined.values) {
+                    assert_eq!(actual, &expected[..(joined.base + taken) * n_embd]);
                 }
             }
         }

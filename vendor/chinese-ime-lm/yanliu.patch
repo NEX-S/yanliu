@@ -204,26 +204,27 @@
 +    hidden: Vec<f32>,
      /// Log-probability of the run's first `i + 1` tokens, summed left to right.
      cumulative: Vec<f32>,
-+    /// Search already projects its final state; retain that result for a complete resume.
-+    last_distribution: Option<Vec<f32>>,
++    /// Distribution at the last retained hidden row, or at `base` when there are no new rows.
++    last_distribution: Vec<f32>,
  }
  
  impl TailRun {
-@@ -212,8 +236,12 @@
+@@ -212,8 +236,13 @@
      ///
      /// The keys and values are truncated rather than rebuilt: position `taken`'s cache is the
      /// leading part of the one already held.
 -    fn resume(&self, taken: usize, n_embd: usize) -> (Prefix, f32) {
 +    fn resume(&self, taken: usize, n_embd: usize, model: &SentenceModel) -> (Prefix, f32) {
          let width = (self.base + taken) * n_embd;
-+        let last_distribution = match &self.last_distribution {
-+            Some(distribution) if taken == self.cumulative.len() => distribution.clone(),
-+            _ => model.distribution(&self.hidden[(taken - 1) * n_embd..taken * n_embd]),
++        let last_distribution = if taken == self.hidden.len() / n_embd {
++            self.last_distribution.clone()
++        } else {
++            model.distribution(&self.hidden[(taken - 1) * n_embd..taken * n_embd])
 +        };
          (
              Prefix {
                  length: self.base + taken,
-@@ -223,7 +251,9 @@
+@@ -223,7 +252,9 @@
                      .iter()
                      .map(|value| value[..width].to_vec())
                      .collect(),
@@ -234,7 +235,7 @@
              },
              self.cumulative[taken - 1],
          )
-@@ -231,14 +261,14 @@
+@@ -231,14 +262,14 @@
  
      /// This run's leading `taken` positions followed by `rest`, as one run over the whole
      /// candidate, so the next keystroke can resume anywhere along it.
@@ -252,7 +253,7 @@
                  .chain(rest.hidden)
                  .collect(),
              cumulative: self.cumulative[..taken]
-@@ -246,6 +276,7 @@
+@@ -246,6 +277,7 @@
                  .copied()
                  .chain(rest.cumulative.iter().map(|value| carried + value))
                  .collect(),
@@ -260,7 +261,7 @@
          }
      }
  }
-@@ -405,19 +436,101 @@
+@@ -405,19 +437,101 @@
          self.config.context
      }
  
@@ -369,7 +370,7 @@
          if candidates.is_empty() {
              return Vec::new();
          }
-@@ -446,6 +559,7 @@
+@@ -446,6 +560,7 @@
          tokens
      }
  
@@ -377,7 +378,7 @@
      fn score_against(&self, prefix: &Prefix, candidates: &[&str]) -> Vec<f32> {
          candidates
              .iter()
-@@ -510,44 +624,44 @@
+@@ -510,44 +625,44 @@
          }
          let last = (tokens.len() - 1) * n_embd;
          let last_hidden = layer_norm(&x[last..], &self.final_weight, &self.final_bias, n_embd);
@@ -437,14 +438,14 @@
 +                values: prefix.values.clone(),
 +                hidden: Vec::new(),
 +                cumulative: vec![prefix.last_distribution[first_token]],
-+                last_distribution: None,
++                last_distribution: prefix.last_distribution.clone(),
 +            };
 +        }
 +        let mut x = self.embed(&tail[..advanced], prefix.length);
          let mut keys_out = Vec::with_capacity(self.blocks.len());
          let mut values_out = Vec::with_capacity(self.blocks.len());
          for (layer, block) in self.blocks.iter().enumerate() {
-@@ -559,12 +673,14 @@
+@@ -559,12 +674,14 @@
                  n_embd,
                  3 * n_embd,
              );
@@ -463,7 +464,7 @@
              let projected = linear(
                  &attended,
                  &block.proj_weight,
-@@ -583,24 +699,20 @@
+@@ -583,24 +700,25 @@
  
          // Position i predicts token i + 1. The opening character is therefore predicted by the last
          // prefix position, and every later one by the tail position before it.
@@ -479,10 +480,16 @@
 -                cumulative.push(running);
 -            }
 -            hidden.push(row);
-+        for (step, row) in normed.chunks_exact(n_embd).enumerate() {
+-        }
++        let last = (advanced - 1) * n_embd;
++        for (step, row) in normed[..last].chunks_exact(n_embd).enumerate() {
 +            running += self.log_probability(row, tail[step + 1]);
 +            cumulative.push(running);
-         }
++        }
++        let last_distribution = self.distribution(&normed[last..]);
++        let last_token = (tail[advanced] as usize).min(self.config.vocab - 1);
++        running += last_distribution[last_token];
++        cumulative.push(running);
          TailRun {
              base: prefix.length,
              keys: keys_out,
@@ -490,11 +497,11 @@
 -            hidden,
 +            hidden: normed,
              cumulative,
-+            last_distribution: None,
++            last_distribution,
          }
      }
  
-@@ -634,44 +746,20 @@
+@@ -634,44 +752,20 @@
      /// the most expensive step per scored character.
      fn log_probability(&self, hidden: &[f32], token: u32) -> f32 {
          let token = (token as usize).min(self.config.vocab - 1);
@@ -547,7 +554,7 @@
      }
  
      fn attention(&self, q: &[f32], k: &[f32], v: &[f32], rows: usize, offset: usize) -> Vec<f32> {
-@@ -723,16 +811,11 @@
+@@ -723,16 +817,11 @@
      /// Only the cached prefix belongs to one session.
      model: Arc<SentenceModel>,
      cached: Option<(Vec<u32>, Prefix)>,
@@ -569,7 +576,7 @@
  }
  
  impl Reranker {
-@@ -741,6 +824,7 @@
+@@ -741,6 +830,7 @@
              model,
              cached: None,
              resume: Vec::new(),
@@ -577,7 +584,7 @@
          }
      }
  
-@@ -748,79 +832,56 @@
+@@ -748,79 +838,56 @@
          &self.model
      }
  
@@ -695,7 +702,7 @@
 +                    values: prefix.values,
 +                    hidden: prefix.hidden,
 +                    cumulative: prefix.cumulative,
-+                    last_distribution: Some(prefix.last_distribution),
++                    last_distribution: prefix.last_distribution,
 +                };
 +                (self.model.encode(&text), Arc::new(run))
 +            }));
@@ -705,7 +712,7 @@
          // Keyed on the tokens rather than the context string, because two different contexts that
          // truncate to the same window are the same prefix and must not invalidate each other.
          let tokens = self.model.prefix_tokens(context, longest);
-@@ -833,11 +894,33 @@
+@@ -833,11 +900,33 @@
              self.cached = Some((tokens, prefix));
              // Every resume point hangs off the old prefix and means nothing against a new one.
              self.resume.clear();
@@ -741,7 +748,7 @@
          let mut scores = Vec::with_capacity(candidates.len());
          for text in candidates {
              let tail = self.model.encode(text);
-@@ -852,77 +935,94 @@
+@@ -852,77 +941,94 @@
                  .saturating_sub(prefix.length)
                  .max(1);
              let tail = &tail[..tail.len().min(limit)];
@@ -887,7 +894,7 @@
      }
  }
  
-@@ -956,14 +1056,264 @@
+@@ -956,14 +1062,264 @@
  fn linear(x: &[f32], w: &Matrix, bias: &[f32], inputs: usize, outputs: usize) -> Vec<f32> {
      let rows = x.len() / inputs;
      let mut out = vec![0.0; rows * outputs];
@@ -1157,7 +1164,7 @@
  }
  
  /// The quantized counterpart of `dot`, with the same eight independent accumulators and the same
-@@ -1036,76 +1386,566 @@
+@@ -1036,76 +1392,625 @@
  
  #[cfg(test)]
  mod tests {
@@ -1633,6 +1640,24 @@
 +                }
 +                let expected_state = state.as_ref().unwrap_or(&prefix);
 +                assert_eq!(expected_state.length, prefix.length + length - 1);
++                assert_eq!(
++                    run.last_distribution
++                        .iter()
++                        .map(|value| value.to_bits())
++                        .collect::<Vec<_>>(),
++                    expected_state
++                        .last_distribution
++                        .iter()
++                        .map(|value| value.to_bits())
++                        .collect::<Vec<_>>()
++                );
++                if let Some(row) = run.hidden.chunks_exact(model.config.n_embd).last() {
++                    let token = *tail.last().unwrap();
++                    assert_eq!(
++                        model.log_probability(row, token).to_bits(),
++                        run.last_distribution[token as usize].to_bits()
++                    );
++                }
 +                for (actual, expected) in [
 +                    (&run.keys, &expected_state.keys),
 +                    (&run.values, &expected_state.values),
@@ -1649,6 +1674,47 @@
 +                            .map(|x| x.to_bits())
 +                            .collect::<Vec<_>>()
 +                    );
++                }
++            }
++        }
++    }
++
++    #[test]
++    fn joined_runs_resume_at_the_actual_last_hidden_and_interior_positions() {
++        let scorer = reranker();
++        let model = scorer.model();
++        let n_embd = model.config.n_embd;
++        let original = model.encode("我今天去上班");
++        let prefix = model.run_prefix(&model.prefix_tokens("昨天", original.len()));
++        let run = model.run_tail(&prefix, &original);
++        for suffix in ["来", "回来了"] {
++            let (from, carried) = run.resume(3, n_embd, model);
++            let rest = model.run_tail(&from, &model.encode(suffix));
++            let joined = run.joined(3, n_embd, carried, rest);
++            let last = joined.hidden.len() / n_embd;
++            for taken in [1, 3, last] {
++                let (resumed, score) = joined.resume(taken, n_embd, model);
++                let expected =
++                    model.distribution(&joined.hidden[(taken - 1) * n_embd..taken * n_embd]);
++                assert_eq!(
++                    resumed
++                        .last_distribution
++                        .iter()
++                        .map(|value| value.to_bits())
++                        .collect::<Vec<_>>(),
++                    expected
++                        .iter()
++                        .map(|value| value.to_bits())
++                        .collect::<Vec<_>>(),
++                    "suffix={suffix}, taken={taken}"
++                );
++                assert_eq!(score.to_bits(), joined.cumulative[taken - 1].to_bits());
++                assert_eq!(resumed.length, joined.base + taken);
++                for (actual, expected) in resumed.keys.iter().zip(&joined.keys) {
++                    assert_eq!(actual, &expected[..(joined.base + taken) * n_embd]);
++                }
++                for (actual, expected) in resumed.values.iter().zip(&joined.values) {
++                    assert_eq!(actual, &expected[..(joined.base + taken) * n_embd]);
 +                }
 +            }
 +        }
