@@ -10,15 +10,16 @@ import argparse
 from collections import Counter, defaultdict
 import hashlib
 import heapq
-from importlib.metadata import version
 import json
 from pathlib import Path
 import re
 import unicodedata
 
 from pypinyin import Style, lazy_pinyin
+import pinyin_phrases
 
 ROOT = Path(__file__).resolve().parents[1]
+PINYIN_PHRASES = Path("data/training/pinyin-phrases.json")
 SPLITS = ("train", "dev", "holdout")
 TRAIN_LIMITS = {"lccc": 24_000, "wiki": 36_000, "cqia": 10_000, "tnews": 2_000,
                 "naturalconv": 4_000, "cped": 4_000}
@@ -30,7 +31,8 @@ HAN = re.compile(r"[\u3400-\u9fff\U00020000-\U000323af]+")
 SYLLABLE = re.compile(r"[a-z]+")
 LENGTHS = ((1, 1), (2, 2), (3, 4), (5, 8))
 COUNT_FIELDS = ("documents", "paragraphs", "han_runs", "proposed_slots",
-                "run_too_short_for_selected_length_and_context", "fitting_proposals",
+                "run_too_short_for_selected_length_and_context",
+                "no_context_run_not_naturally_delimited", "no_context_run_outside_slot_length", "fitting_proposals",
                 "document_slot_not_selected", "selected_document_slots", "pypinyin_calls",
                 "hash_pool_not_selected", "annotation_pool_cases",
                 "non_ascii_full_pinyin", "sampled_document_cases", "existing_evaluation_query",
@@ -101,26 +103,40 @@ def document_proposals(paragraphs, counts):
     fitting = 0
     counts["documents"] += 1
     counts["paragraphs"] += len(paragraphs)
-    for paragraph in paragraphs:
-        for run in HAN.finditer(paragraph["text"]):
+    for paragraph_index, paragraph in enumerate(paragraphs):
+        paragraph_text = paragraph["text"]
+        for run in HAN.finditer(paragraph_text):
             text = run.group()
             counts["han_runs"] += 1
             for slot in slots:
                 counts["proposed_slots"] += 1
                 identity = (document_group, paragraph["paragraph"], run.start(), slot)
-                selection = hashed(*identity, "cut")
                 low, high = LENGTHS[slot]
-                length = low + selection[0] % (high - low + 1)
                 contextual = hashed(document_group, slot, "context")[0] % 4 != 0
-                minimum = int(contextual and run.start() == 0)
-                if len(text) < length + minimum:
-                    counts["run_too_short_for_selected_length_and_context"] += 1
-                    continue
-                start = minimum + int.from_bytes(selection[1:9], "big") % (len(text) - length - minimum + 1)
+                if contextual:
+                    selection = hashed(*identity, "cut")
+                    length = low + selection[0] % (high - low + 1)
+                    minimum = int(run.start() == 0)
+                    if len(text) < length + minimum:
+                        counts["run_too_short_for_selected_length_and_context"] += 1
+                        continue
+                    start = minimum + int.from_bytes(selection[1:9], "big") % (len(text) - length - minimum + 1)
+                else:
+                    left = paragraph_text[run.start() - 1] if run.start() else (
+                        paragraphs[paragraph_index - 1]["text"][-1] if paragraph_index else "")
+                    right = paragraph_text[run.end()] if run.end() < len(paragraph_text) else (
+                        paragraphs[paragraph_index + 1]["text"][0] if paragraph_index + 1 < len(paragraphs) else "")
+                    if any(not (char.isspace() or unicodedata.category(char).startswith("P")) for char in left + right):
+                        counts["no_context_run_not_naturally_delimited"] += 1
+                        continue
+                    if not low <= len(text) <= high:
+                        counts["no_context_run_outside_slot_length"] += 1
+                        continue
+                    start, length = 0, len(text)
                 priority = hashed(*identity, "document-slot")
                 fitting += 1
                 if slot not in best or priority < best[slot][0]:
-                    best[slot] = (priority, identity, text, start, length, contextual, paragraph["text"], run.start())
+                    best[slot] = (priority, identity, text, start, length, contextual, paragraph_text, run.start())
     counts["fitting_proposals"] += fitting
     counts["document_slot_not_selected"] += fitting - len(best)
     counts["selected_document_slots"] += len(best)
@@ -191,6 +207,15 @@ def build(documents, output, evidence, exclusion_paths,
             raise FileExistsError(path)
     document_sha = digest(documents)
     excluded, exclusion_files = evaluation_queries(exclusion_paths)
+    phrases_path = (ROOT / PINYIN_PHRASES).resolve()
+    phrases_file = {"path": str(phrases_path), "sha256": pinyin_phrases.load_pinyin_phrases(phrases_path)}
+    loader_path = Path(pinyin_phrases.__file__).resolve()
+    loader_file = {"path": str(loader_path), "sha256": digest(loader_path)}
+    script_path = Path(__file__).resolve()
+    script_sha = digest(script_path)
+    document_file = {"path": str(documents.resolve()), "sha256": document_sha}
+    boundary_files = [document_file, phrases_file, loader_file,
+                      {"path": str(script_path), "sha256": script_sha}, *exclusion_files]
     selected = defaultdict(list)
     limits = {"train": train_limits, "dev": dev_limits, "holdout": holdout_limits}
     for split, source_limits in limits.items():
@@ -215,8 +240,9 @@ def build(documents, output, evidence, exclusion_paths,
                 heapq.heappush(heap, entry)
             elif priority < -heap[0][0]:
                 heapq.heapreplace(heap, entry)
-    if digest(documents) != document_sha:
-        raise ValueError("documents changed during ranking-case construction")
+    for boundary in boundary_files:
+        if digest(boundary["path"]) != boundary["sha256"]:
+            raise ValueError(f"{boundary['path']} changed during ranking-case construction")
     output.mkdir(parents=True, exist_ok=True)
     evidence.mkdir(parents=True, exist_ok=True)
     summaries, seen = {}, set()
@@ -258,15 +284,19 @@ def build(documents, output, evidence, exclusion_paths,
                             "source_groups": {source: len({case["source_group"] for case in cases if case["source_group"].startswith(source + ":")}) for source in TRAIN_LIMITS},
                             "documents": len({case["document_group"] for case in cases}),
                             "source_stats": {source: dict(counts[(split, source)]) for source in TRAIN_LIMITS}}
-    recipe = {"format": "yanliu-public-ranking-data-v1", "documents": {"path": str(documents.resolve()), "sha256": document_sha},
-              "script_sha256": digest(Path(__file__)), "pypinyin_version": version("pypinyin"),
+    for boundary in boundary_files:
+        if digest(boundary["path"]) != boundary["sha256"]:
+            raise ValueError(f"{boundary['path']} changed during ranking-case construction")
+    recipe = {"format": "yanliu-public-ranking-data-v1", "documents": document_file,
+              "script_sha256": script_sha, "pypinyin_version": pinyin_phrases.PYPINYIN_VERSION,
+              "pinyin_phrases": phrases_file, "pinyin_phrases_loader": loader_file,
               "exclusion_files": exclusion_files, "existing_evaluation_queries": len(excluded),
               "rules": {"split": "inherit each complete source/group document assignment; never reassign cases",
                         "document_caps": {"train": 4, "dev": 1, "holdout": 1},
                         "lengths": "one train slot each for 1,2,3-4,5-8 characters; dev/holdout slot chosen by SHA256",
-                        "sampling": "SHA256(document, paragraph, Han-run offset, slot) fixes cut and length; minimum document-slot hash chooses paragraph/run; independent source-budget hash selects a fixed pool of ceil(1.25 * target) before any pypinyin call; annotate/filter/deduplicate only this pool, retain at most target in original hash order; no adaptive resampling to fill shortfalls",
-                        "context": "document-slot hash requests empty context 25% of the time; otherwise preserve 1..32 preceding paragraph characters including punctuation and earlier turns from that conversation; a target may begin at a Han-run boundary when the paragraph already has context; never cross paragraph/conversation boundaries",
-                        "pinyin": "pypinyin NORMAL strict on each complete contiguous Han run before target slicing; one lowercase ASCII syllable per target character; automatic polyphonic readings are not human gold",
+                        "sampling": "contextual slots use SHA256(document, paragraph, Han-run offset, slot) to fix cut and length; no-context slots use only complete Han runs whose length fits the slot and whose neighbors are punctuation/whitespace or document edges, checking adjacent paragraphs at internal paragraph edges; minimum document-slot hash chooses paragraph/run; independent source-budget hash selects a fixed pool of ceil(1.25 * target) before any pypinyin call; annotate/filter/deduplicate only this pool, retain at most target in original hash order; no adaptive resampling to fill shortfalls",
+                        "context": "document-slot hash requests empty context 25% of the time, rejecting no-context runs bounded by digits/Latin or unpunctuated paragraph cuts; otherwise preserve 1..32 preceding paragraph characters including punctuation and earlier turns from that conversation; a target may begin at a Han-run boundary when the paragraph already has context; never cross paragraph/conversation boundaries",
+                        "pinyin": "pinned pypinyin with the recorded public phrase supplement; NORMAL strict on each complete contiguous Han run before target slicing; one lowercase ASCII syllable per target character; automatic polyphonic readings are not human gold",
                         "dedup": "SHA256 of NFKC/casefold/alphanumeric-normalized (input,context,gold), matching the train_ranker input boundary, against recorded existing evaluation and globally across the fixed annotation pools; different substantive contexts of a common word remain eligible",
                         "selection": "public text only; no CLI calls, model scores, candidate filtering or gold injection into recall",
                         "source_groups": "source_group/group_id inherit source:split_group (NaturalConv news document; CPED TV series); document_group identifies the concrete conversation/page/question used for per-document slot limits",

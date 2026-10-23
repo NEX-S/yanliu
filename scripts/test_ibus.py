@@ -577,6 +577,70 @@ def check_learning_failures(binary):
             assert persisted() == before, 'disabled learning changed state during shutdown'
 
 
+def check_ordered_notifications_and_disconnect(binary, options):
+    with PrivateBus() as bus:
+        service = bus.start_service(binary, '--data-dir', ROOT / 'data', *options)
+        engine = bus.create_engine()
+        signals = bus.record(ENGINE, engine)
+
+        def purpose(value):
+            return GLib.Variant('(ssv)', (ENGINE, 'ContentType', GLib.Variant('(uu)', (value, 0))))
+
+        for _ in range(200):
+            bus.engine(engine, 'Set', purpose(0), PROPERTIES)
+            message = Gio.DBusMessage.new_method_call(YANLIU, engine, PROPERTIES, 'Set')
+            message.set_body(purpose(PASSWORD_PURPOSE))
+            assert not message.get_flags() & Gio.DBusMessageFlags.NO_REPLY_EXPECTED
+            assert bus.connection.send_message(message, Gio.DBusSendMessageFlags.NONE)[0]
+            assert not bus.engine_key(engine, ord('n')), 'ContentType must apply before the next key, without awaiting its reply'
+
+        bus.engine(engine, 'Set', purpose(0), PROPERTIES)
+        for changed in (False, True):
+            for action in ('space', 'digit', 'click'):
+                bus.engine(engine, 'FocusIn')
+                context = '旧前文'
+                bus.engine(engine, 'SetSurroundingText', GLib.Variant('(vuu)', (ibus_text(context), len(context), len(context))))
+                for char in 'ni':
+                    assert bus.engine_key(engine, ord(char))
+                start = len(signals)
+                bus.engine(engine, 'CursorDown')
+                wait(lambda: any(name == 'UpdateLookupTable' and ibus_object(params).get_cursor_pos() == 1
+                                 for name, params in signals[start:]))
+                displayed = last_table(signals)
+                context = '新前文' if changed else context
+                start = len(signals)
+                message = Gio.DBusMessage.new_method_call(YANLIU, engine, ENGINE, 'SetSurroundingText')
+                message.set_body(GLib.Variant('(vuu)', (ibus_text(context), len(context), len(context))))
+                assert bus.connection.send_message(message, Gio.DBusSendMessageFlags.NONE)[0]
+                if action == 'click':
+                    bus.engine(engine, 'CandidateClicked', GLib.Variant('(uuu)', (1, 1, 0)))
+                else:
+                    assert bus.engine_key(engine, ord(' ' if action == 'space' else '2'))
+                wait(lambda: commits(signals[start:]))
+                published = False
+                for name, params in signals[start:]:
+                    if name == 'UpdateLookupTable':
+                        displayed = ibus_object(params)
+                        published = True
+                    elif name == 'CommitText':
+                        index = displayed.get_cursor_pos() if action == 'space' else 1
+                        assert ibus_object(params).get_text() == displayed.get_candidate(index).get_text()
+                        assert published == changed, 'only a changed effective context rebuilds the menu before commit'
+                        break
+
+        # Kill only the daemon: the idle service must notice EOF, flush and release its lock.
+        bus.daemon.kill()
+        bus.daemon.wait(timeout=5)
+        assert service.wait(timeout=5) != 0, 'an unexpected bus disconnect must report failure'
+        assert 'IBus connection closed' in service.log.read_text(), service.log.read_text()
+        state = bus.directory / 'state/yanliu'
+        with (state / 'learning.lock').open('r+b') as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        snapshot = json.loads((state / 'learning.json').read_text())
+        assert sum(row['count'] for row in snapshot['rows']) == 6, 'only explicit menu choices may be learned'
+        assert all(row['input'] == 'ni' for row in snapshot['rows'])
+
+
 def check_user_dictionary(binary):
     with PrivateBus() as bus:
         dictionaries = bus.directory / 'assets/dictionaries'
@@ -711,6 +775,8 @@ def main():
     print('PASS: component discovery and on-demand service start')
     check_learning_failures(binary)
     print('PASS: learning startup and writer failures keep their causes; --no-learning leaves state untouched')
+    check_ordered_notifications_and_disconnect(binary, options)
+    print('PASS: pipelined password property and surrounding notifications precede selection; daemon disconnect flushes and releases learning')
     check_user_dictionary(binary)
     print('PASS: explicit user dictionary; malformed table rejected with its path')
     check_contextual_learning(binary, Path(args.model).resolve(strict=True) if args.model else MODEL)

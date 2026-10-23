@@ -54,7 +54,7 @@ python3 scripts/fetch_assets.py
 
 完成后**注销并重新登录**，在 **GNOME 设置 → 键盘 → 输入源**中添加“砚流”。安装脚本不会切换当前输入源。
 
-已有安装可运行 `./packaging/install-local.sh --upgrade`，保留上一版资产；需要回退时运行 `./packaging/install-local.sh --rollback`。操作前正常退出砚流服务，完成后重新加载，配置和选词记录保留。自定义安装位置和详细步骤见[安装说明](packaging/README.md)。
+已有 CPU 安装可运行 `./packaging/install-local.sh --upgrade`，保留当前模型与上一版资产；显式指定 `YANLIU_MODEL_DIR` 可更换模型。需要回退时运行 `./packaging/install-local.sh --rollback`。操作前正常退出砚流服务，完成后重新加载，配置和选词记录保留。自定义安装位置、GPU/NPU 升级和详细步骤见[安装说明](packaging/README.md)。
 
 ## 使用
 
@@ -91,14 +91,16 @@ target/release/yanliu --model data/models/sentence-model.safetensors \
 
 ## 模型
 
-两个 v2 模型都从随机权重训练，使用约 5,227 万字符的公共中文文本，再以实际 CLI 候选做排序微调。日常运行只用本机 CPU，不调用远端大模型。
+公开发布的两个 v2 模型都从随机权重训练，使用约 5,227 万字符的公共中文文本，再以实际 CLI 候选做排序微调。日常运行只用本机 CPU，不调用远端大模型。
 
-- **4M：默认。** 实际 448 万参数，INT8 文件约 4.73 MB，适合日常输入。与原来本机的 7M 相比，开发集首选命中接近，CPU 开销更低；旧回放集有小幅回退，具体数字见 [4M 模型卡](data/model-cards/yanliu-4m-v2/README.md)。
-- **25M：可选。** 实际 2,354 万参数，INT8 文件约 24.03 MB，本轮留出集的首选命中更高，计算量也更高，见 [25M 模型卡](data/model-cards/yanliu-25m-v2/README.md)。
+默认下载仍是 `models-v2` 发布的 4M 权重；后续本机训练的修复版尚未发布，直接安装不会取得这些权重更新。版本区别及来源复核见[模型来源复核](data/model-cards/SOURCE-REVIEW.md)。
 
-在权重和默认选择冻结后的 1,750 条留出样本上，首选命中率为 4M **73.49%**、25M **75.77%**，原本机 7M 为 **71.54%**。所有样本均计入分母，包括未召回的目标；自动注音和来源文本仍可能有误，这些数字不等同于日常输入准确率。
+- **4M：默认。** 实际 448 万参数，INT8 文件约 4.73 MB，适合日常输入。models-v2 发布时，相比原来本机的 7M，开发集首选命中接近、CPU 开销更低，旧回放集有小幅回退；具体数字见 [4M 模型卡](data/model-cards/yanliu-4m-v2/README.md)。
+- **25M：可选。** 实际 2,354 万参数，INT8 文件约 24.03 MB，models-v2 发布时的留出集首选命中更高，计算量也更高，见 [25M 模型卡](data/model-cards/yanliu-25m-v2/README.md)。
 
-本机三轮 CPU 回放中，发生模型评分的帧，输入处理与候选提升合计 p95 为 4M **4.15 ms**、25M **35.70 ms**。这是同一套 Session 和候选池的进程内测量，不包含 IBus 通信与 GNOME 绘制。开发集用于选模，不能当作日常输入准确率。
+models-v2 发布时，在权重和默认选择冻结后的 1,750 条留出样本上，首选命中率为 4M **73.49%**、25M **75.77%**，原本机 7M 为 **71.54%**。所有样本均计入分母，包括未召回的目标；自动注音和来源文本仍可能有误，这些数字不等同于日常输入准确率。
+
+models-v2 发布时的三轮 CPU 回放中，发生模型评分的帧，输入处理与候选提升合计 p95 为 4M **4.15 ms**、25M **35.70 ms**。这组历史基准使用相同的 Session 和静态候选池，只测进程内处理，不含 IBus 通信与 GNOME 绘制。当前代码已加入拼音约束的模型召回，其开销需按新路径单独测量。
 
 默认资产由 `fetch_assets.py` 下载并校验 SHA-256；`python3 scripts/fetch_assets.py --verify-only` 可检查本地文件。[模型发布页](https://github.com/NEX-S/yanliu/releases/tag/models-v2)提供两个模型的压缩包，包含权重、来源和评测说明。解包后可在首次安装时指定：
 
@@ -111,7 +113,7 @@ YANLIU_MODEL_DIR=/absolute/path/to/yanliu-25m-v2 \
 
 ## 原理
 
-词库先给出候选，本地字符模型再根据前文调整首选。IBus 和 CLI 使用同一套输入、编辑和选词代码。
+词库先给出候选，本地字符模型根据前文补充拼音组合、调整首选。IBus 和 CLI 使用同一套输入、编辑和选词代码。
 
 ```mermaid
 flowchart LR
@@ -123,6 +125,7 @@ flowchart LR
     subgraph Core["Rust 输入核心"]
         Session["Session<br/>输入与会话"] --> Decoder["decoder<br/>切分与召回"]
         Session --> Model["model<br/>候选排序"]
+        Model -->|拼音约束搜索| Decoder
         Session --> Learning["Learning<br/>个人偏好"]
         Model --> Learning
     end
@@ -132,7 +135,7 @@ flowchart LR
     class Session,Decoder,Model,Learning core
 ```
 
-词库在启动时加载。逐键处理先显示词库结果，再把候选快照交给模型线程。模型只比较真实候选，最多提升其中一项；候选文本和消费的拼音范围保持不变。
+词库在启动时加载。逐键处理先显示词库结果，再把候选快照交给模型线程。CPU 模型沿着词库提供的单字读音搜索，补充至多十二个完整拼音组合，让部分低频字有机会在静态剪枝前参与比较。合并候选后，最多提升一项；每个新增转换都必须对应实际输入，原有普通转换的身份和静态分数保持不变。
 
 选中部分候选后，Session 保留剩余拼音。默认学习保存所选拼音、文本和次数；开启 `contextual_learning` 后，还可以按前文学习个人偏好。配置和数据管理见[本地学习](docs/USER-GUIDE.md#学习)。
 
@@ -154,10 +157,10 @@ sequenceDiagram
     E->>S: 更新输入与 revision，召回候选
     E->>P: 显示词库候选
     E->>M: snapshot + generation
-    M->>M: 比较最多 9 项完整候选
-    M-->>E: 返回待提升候选
+    M->>M: 沿合法拼音路径搜索，合并候选并评分
+    M-->>E: 返回候选与首选建议
     alt generation 与 revision 有效
-        E->>S: 应用排序结果
+        E->>S: 应用候选与排序结果
         E->>P: 更新候选顺序
     else 输入、焦点或导航状态已改变
         Note over E,M: 丢弃旧结果
@@ -171,7 +174,7 @@ sequenceDiagram
 <details>
 <summary>数据与训练</summary>
 
-公共语料来自固定版本的 LCCC、中文 Wikipedia、COIG-CQIA 人类回答和 TNEWS。先按会话、页面或问题划分数据，再做清洗和去重。
+公共语料来自固定版本的 NaturalConv、CPED、LCCC、中文 Wikipedia、COIG-CQIA 人类回答和 TNEWS。先按会话、页面或问题划分数据，再做清洗和去重。各来源的使用条件分别保留；公开可下载不代表具有统一的开放许可。
 
 ```mermaid
 flowchart LR
@@ -181,7 +184,7 @@ flowchart LR
     end
     subgraph Train["训练"]
         direction TB
-        Pretrain["随机权重<br/>下一字符预训练"] --> Tune["排序 CE + 文本 CE"]
+        Pretrain["随机权重<br/>下一字符预训练"] --> Tune["错误候选排序 CE · 正确候选间隔保护<br/>缺失目标后缀 CE · 父模型文本 KL"]
         Recall["拼音样本<br/>CLI 真实候选"] --> Tune
     end
     subgraph Check["评估与导出"]
@@ -205,3 +208,5 @@ flowchart LR
 ## 许可
 
 代码采用 [GPL-3.0-or-later](LICENSE)。词库、模型和 vendor 保留各自许可与署名，见[第三方说明](data/THIRD_PARTY.md)；固定来源与 SHA-256 见[资产清单](data/manifest.json)。
+
+混合语料训练的模型没有统一开源许可。NaturalConv 官方条款限制为个人、非商业科研等指定用途，COIG-CQIA 与 TNEWS 的部分授权条件仍待核实；详见[来源复核](data/model-cards/SOURCE-REVIEW.md)。代码许可不替模型的数据来源补充授权。

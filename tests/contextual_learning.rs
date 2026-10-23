@@ -51,9 +51,8 @@ fn model() -> Model {
     Model::load(&path, "cpu", None).unwrap()
 }
 
-fn menu(session: &Session) -> Vec<(String, usize, CandidateSource, u32)> {
-    let mut rows: Vec<_> = session
-        .candidates()
+fn menu(candidates: &[yanliu::Candidate]) -> Vec<(String, usize, CandidateSource, u32)> {
+    let mut rows: Vec<_> = candidates
         .iter()
         .map(|candidate| {
             (
@@ -68,7 +67,7 @@ fn menu(session: &Session) -> Vec<(String, usize, CandidateSource, u32)> {
     rows
 }
 
-fn promoted_session(
+fn refined_session(
     decoder: &Arc<Decoder>,
     learning: &Arc<Learning>,
     model: &mut Model,
@@ -78,13 +77,26 @@ fn promoted_session(
     let mut session = Session::new(decoder.clone(), Some(learning.clone()));
     session.set_context(context);
     session.insert(input).unwrap();
-    let before = menu(&session);
-    let snapshot = session.snapshot();
-    if let Some(index) = model.promotion(&snapshot).unwrap() {
-        assert!(session.apply_promotion(snapshot.revision, index));
+    let mut snapshot = session.snapshot();
+    let promotion = model
+        .refine(&mut snapshot, decoder, || true)
+        .unwrap()
+        .unwrap();
+    for existing in session.candidates().iter().filter(|candidate| {
+        matches!(
+            candidate.source,
+            CandidateSource::ExactDictionary | CandidateSource::Composed | CandidateSource::User
+        )
+    }) {
+        assert!(
+            snapshot.candidates.contains(existing),
+            "refinement changed an existing conversion"
+        );
     }
+    let before = menu(&snapshot.candidates);
+    assert!(session.apply_candidates(snapshot.revision, snapshot.candidates, promotion.index));
     assert_eq!(
-        menu(&session),
+        menu(session.candidates()),
         before,
         "promotion changed candidate identity or static data"
     );
@@ -110,13 +122,13 @@ fn explicit_contextual_choices_change_real_session_order_and_survive_restart() {
     for _ in 0..4 {
         for (context, text) in choices {
             let mut session =
-                promoted_session(&decoder, &writer.learning, &mut model, "xian", context);
+                refined_session(&decoder, &writer.learning, &mut model, "xian", context);
             choose(&mut session, text, 4);
             assert_eq!(session.input(), "");
         }
     }
     for (context, text) in choices {
-        let session = promoted_session(&decoder, &writer.learning, &mut model, "xian", context);
+        let session = refined_session(&decoder, &writer.learning, &mut model, "xian", context);
         assert_eq!(
             session.candidates()[0].text,
             text,
@@ -139,7 +151,7 @@ fn explicit_contextual_choices_change_real_session_order_and_survive_restart() {
     }
     let mut writer = directory.writer(true);
     for (context, text) in choices {
-        let session = promoted_session(&decoder, &writer.learning, &mut model, "xian", context);
+        let session = refined_session(&decoder, &writer.learning, &mut model, "xian", context);
         assert_eq!(
             session.candidates()[0].text,
             text,
@@ -156,13 +168,15 @@ fn explicit_contextual_choices_change_real_session_order_and_survive_restart() {
         let mut session = Session::new(decoder.clone(), Some(ordinary.learning.clone()));
         session.set_context(context);
         session.insert("xian").unwrap();
-        assert_eq!(model.promotion(&session.snapshot()).unwrap(), None);
+        let leader = session.candidates()[0].clone();
+        let session = refined_session(&decoder, &ordinary.learning, &mut model, "xian", context);
+        assert_eq!(session.candidates()[0], leader);
     }
     ordinary.finish().unwrap();
 }
 
 #[test]
-fn explicit_choices_override_composed_public_protection_and_survive_restart() {
+fn explicit_composed_choices_learn_and_survive_restart() {
     let directory = StateDirectory::new();
     let decoder = Arc::new(Decoder::new(
         Dictionary::from_rime_reader(Cursor::new(
@@ -172,7 +186,9 @@ fn explicit_choices_override_composed_public_protection_and_survive_restart() {
     ));
     let mut model = model();
     let mut writer = directory.writer(true);
-    let mut session = promoted_session(&decoder, &writer.learning, &mut model, "xian", "我去");
+    let mut session = Session::new(decoder.clone(), Some(writer.learning.clone()));
+    session.set_context("我去");
+    session.insert("xian").unwrap();
     assert_eq!(session.candidates()[0].text, "现");
     assert_eq!(
         session.candidates()[0].source,
@@ -188,10 +204,10 @@ fn explicit_choices_override_composed_public_protection_and_survive_restart() {
         CandidateSource::Composed
     );
     choose(&mut session, "西安", 4);
-    session = promoted_session(&decoder, &writer.learning, &mut model, "xian", "我去");
+    session = refined_session(&decoder, &writer.learning, &mut model, "xian", "我去");
     assert_eq!(session.candidates()[0].text, "西安");
     assert_eq!(session.candidates()[0].source, CandidateSource::User);
-    let learned_menu = menu(&session);
+    let learned_menu = menu(session.candidates());
     writer.finish().unwrap();
     let saved = directory.snapshot();
     assert_eq!(
@@ -201,9 +217,9 @@ fn explicit_choices_override_composed_public_protection_and_survive_restart() {
     assert!(saved["updates"].as_u64().unwrap() > 0);
 
     let mut writer = directory.writer(true);
-    let session = promoted_session(&decoder, &writer.learning, &mut model, "xian", "我去");
+    let session = refined_session(&decoder, &writer.learning, &mut model, "xian", "我去");
     assert_eq!(session.candidates()[0].text, "西安");
-    assert_eq!(menu(&session), learned_menu);
+    assert_eq!(menu(session.candidates()), learned_menu);
     writer.finish().unwrap();
     assert_eq!(directory.snapshot(), saved);
 }
@@ -264,7 +280,7 @@ fn contextual_correction_can_overcome_a_large_stored_count_without_reversing_oth
     let now = "此时此刻";
     // The real LM also prefers 西安 here, so correcting 现 must overcome both priors.
     for context in [travel, now] {
-        let session = promoted_session(&decoder, &writer.learning, &mut model, "xian", context);
+        let session = refined_session(&decoder, &writer.learning, &mut model, "xian", context);
         assert_eq!(
             session.candidates()[0].text,
             "西安",
@@ -274,7 +290,7 @@ fn contextual_correction_can_overcome_a_large_stored_count_without_reversing_oth
     }
     let mut first_adapted = None;
     for previous_choices in 0..8 {
-        let mut session = promoted_session(&decoder, &writer.learning, &mut model, "xian", now);
+        let mut session = refined_session(&decoder, &writer.learning, &mut model, "xian", now);
         if session.candidates()[0].text == "现" && first_adapted.is_none() {
             first_adapted = Some(previous_choices);
         }
@@ -284,7 +300,7 @@ fn contextual_correction_can_overcome_a_large_stored_count_without_reversing_oth
         "stored count=1000; first observed contextual promotion after {first_adapted:?} choices (8 choices total)"
     );
     for (context, expected) in [(travel, "西安"), (now, "现")] {
-        let session = promoted_session(&decoder, &writer.learning, &mut model, "xian", context);
+        let session = refined_session(&decoder, &writer.learning, &mut model, "xian", context);
         assert_eq!(
             session.candidates()[0].text,
             expected,
@@ -316,10 +332,10 @@ fn contextual_habits_can_reverse_and_relearn_without_replacing_saved_parameters(
     for expected in ["西安", "现", "西安"] {
         for _ in 0..4 {
             let mut session =
-                promoted_session(&decoder, &writer.learning, &mut model, "xian", context);
+                refined_session(&decoder, &writer.learning, &mut model, "xian", context);
             choose(&mut session, expected, 4);
         }
-        let session = promoted_session(&decoder, &writer.learning, &mut model, "xian", context);
+        let session = refined_session(&decoder, &writer.learning, &mut model, "xian", context);
         assert_eq!(
             session.candidates()[0].text,
             expected,
@@ -331,7 +347,7 @@ fn contextual_habits_can_reverse_and_relearn_without_replacing_saved_parameters(
     assert_eq!(snapshot["version"], 1);
     assert_eq!(snapshot["adapter"].as_array().unwrap().len(), 4096);
     let mut writer = directory.writer(true);
-    let session = promoted_session(&decoder, &writer.learning, &mut model, "xian", context);
+    let session = refined_session(&decoder, &writer.learning, &mut model, "xian", context);
     assert_eq!(session.candidates()[0].text, "西安");
     writer.finish().unwrap();
     assert_eq!(directory.snapshot(), snapshot);
@@ -367,7 +383,7 @@ fn confirmed_words_are_recalled_when_public_candidates_change_and_survive_restar
         assert!(other_engine.candidates().contains(candidate));
     }
     assert_eq!(other_engine.candidates().len(), public.len() + 1);
-    let before = menu(&other_engine);
+    let before = menu(other_engine.candidates());
     writer.finish().unwrap();
     assert_eq!(
         directory.snapshot()["rows"],
@@ -377,7 +393,7 @@ fn confirmed_words_are_recalled_when_public_candidates_change_and_survive_restar
     let mut writer = directory.writer(false);
     let mut session = Session::new(changed.clone(), Some(writer.learning.clone()));
     session.insert("ni").unwrap();
-    assert_eq!(menu(&session), before);
+    assert_eq!(menu(session.candidates()), before);
     session.reset();
     session.insert("nihao").unwrap();
     choose(&mut session, "泥", 2);
@@ -495,7 +511,12 @@ fn single_initial_choice_persists_without_leaking_into_longer_input_or_training_
             session.insert(suffix).unwrap();
             let mut baseline = Session::new(decoder.clone(), None);
             baseline.insert(session.input()).unwrap();
-            assert_eq!(menu(&session), menu(&baseline), "{}", session.input());
+            assert_eq!(
+                menu(session.candidates()),
+                menu(baseline.candidates()),
+                "{}",
+                session.input()
+            );
             assert!(
                 session
                     .candidates()

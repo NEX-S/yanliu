@@ -17,3 +17,4 @@
 {"id": "teacher-r239-c013-78004dd80063", "input": "yuesheng", "context": "远处传来悠扬的", "gold": "乐声", "bucket": "daily", "source_group": "78004dd800632cc9a4cf5f0d140c97b7799a364be66ac0e58e5d254c0122e2ae"}
 {"id": "teacher-r502-c007-c6df647ecb5c", "input": "chailv", "context": "", "gold": "差旅", "bucket": "office", "source_group": "c6df647ecb5cf6f503ab7e17d76d0c600fcab1ce342c1449c5ab9aee5cefd2a1"}
 {"id": "teacher-r511-c011-b12990e0b803", "input": "daimahang", "context": "调试时先定位到出错的", "gold": "代码行", "bucket": "software", "source_group": "b12990e0b80396380be0ffc43ac84bdb6c60db649e7941c21e6f847c8d17ff22"}
+{"id": "teacher-r206-c014-a7ee0a6f2999", "input": "dian", "context": "傍晚沿着河边的", "gold": "堤岸", "bucket": "daily", "source_group": "a7ee0a6f29991f870104ecaeb512343c4f746058f926cd2701e0950875481b8d", "group_id": "dian"}

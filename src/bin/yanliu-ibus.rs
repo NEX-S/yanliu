@@ -57,7 +57,7 @@ async fn service() -> Result<()> {
     let learning = learning_writer
         .as_ref()
         .map(|writer| writer.learning.clone());
-    let worker = ibus::RankingWorker::start(model, report)?;
+    let worker = ibus::RankingWorker::start(model, decoder.clone(), report)?;
     let mut terminate = signal(SignalKind::terminate())?;
     let mut interrupt = signal(SignalKind::interrupt())?;
     let connection = ibus::serve(
@@ -71,6 +71,7 @@ async fn service() -> Result<()> {
     eprintln!("Yanliu IBus factory ready");
     let failure = tokio::select! {
         cause = failed.recv() => cause,
+        _ = connection.closed() => Some("IBus connection closed".to_owned()),
         _ = terminate.recv() => None,
         _ = interrupt.recv() => None,
     };

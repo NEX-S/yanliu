@@ -1,0 +1,13 @@
+{"id": "reading-shijin-food", "input": "shijin", "context": "这份炒饭加入多种配料，是"}
+{"id": "reading-cross-word", "input": "jiaotongfangbianyiju", "context": "这个社区规划合理，"}
+{"id": "reading-cross-word-music", "input": "guanyinleyuzhuren", "context": "故事里说，"}
+{"id": "reading-shijin-food-select1", "input": "shijin", "context": "这份炒饭加入多种配料，是", "select": {"text": "什锦", "consumed": 6}}
+{"id": "reading-cross-word-select1", "input": "jiaotongfangbianyiju", "context": "这个社区规划合理，", "select": {"text": "交通方便宜居", "consumed": 20}}
+{"id": "reading-cross-word-music-select1", "input": "guanyinleyuzhuren", "context": "故事里说，", "select": {"text": "观音乐于助人", "consumed": 17}}
+{"id": "reading-shijin-food-select2", "input": "shijin", "context": "这份炒饭加入多种配料，是", "select": {"text": "什锦", "consumed": 6}}
+{"id": "reading-cross-word-select2", "input": "jiaotongfangbianyiju", "context": "这个社区规划合理，", "select": {"text": "交通方便宜居", "consumed": 20}}
+{"id": "reading-cross-word-music-select2", "input": "guanyinleyuzhuren", "context": "故事里说，", "select": {"text": "观音乐于助人", "consumed": 17}}
+{"id": "reading-shijin-food-select3", "input": "shijin", "context": "这份炒饭加入多种配料，是", "select": {"text": "什锦", "consumed": 6}}
+{"id": "reading-cross-word-select3", "input": "jiaotongfangbianyiju", "context": "这个社区规划合理，", "select": {"text": "交通方便宜居", "consumed": 20}}
+{"id": "reading-cross-word-music-select3", "input": "guanyinleyuzhuren", "context": "故事里说，", "select": {"text": "观音乐于助人", "consumed": 17}}
+{"id": "reading-shijin-wipes", "input": "shijin", "context": "擦手时请拿一张"}

@@ -8,7 +8,9 @@
 
 默认安装以 `-C target-cpu=native` 构建 CPU release 服务；产物应在目标机器重新编译。默认前缀为 `~/.local`，也可设置绝对、shell 安全的 `YANLIU_PREFIX`。实际二进制、词库和模型位于 `share/yanliu`，`bin/yanliu-ibus` 是指向实际二进制的符号链接，组件 XML 位于 `share/ibus/component/yanliu.xml`。默认安装不包含训练、评测文件、相邻 IR 或原生 runtime；显式 GPU/NPU 安装见下文。
 
-CPU 默认安装仓库的 `data/models/sentence-model.safetensors`，即[从随机权重训练的 4M v2](../data/model-cards/yanliu-4m-v2/README.md)；设置 `YANLIU_MODEL_DIR=/absolute/model/directory` 可安装选定目录中的同名源权重，例如[可选 25M v2](../data/model-cards/yanliu-25m-v2/README.md)。模型目录内的 `LICENSE`、`NOTICE`、`README.md` 与 `provenance.json` 随发布包提供，也随模型复制并纳入安装哈希。v2 发布包供 CPU 使用，不包含 IR 或原生加速运行库。
+CPU 首次安装默认使用仓库的 `data/models/sentence-model.safetensors`，即[从随机权重训练的 4M v2](../data/model-cards/yanliu-4m-v2/README.md)；设置 `YANLIU_MODEL_DIR=/absolute/model/directory` 可安装选定目录中的同名源权重，例如[可选 25M v2](../data/model-cards/yanliu-25m-v2/README.md)。模型目录内的 `LICENSE`、`NOTICE`、`README.md` 与 `provenance.json` 随发布包提供，也随模型复制并纳入安装哈希。v2 发布包供 CPU 使用，不包含 IR 或原生加速运行库。
+
+默认下载的 4M v2 与后续本机修复版是不同权重，版本及来源条件见[模型来源复核](../data/model-cards/SOURCE-REVIEW.md)。仓库更新和 `fetch_assets.py` 不会自动更新已有系统安装。
 
 `installation.json` 记录实际选中的源权重路径、SHA-256 和全部安装文件的 SHA。`source-manifest.json` 只记录仓库固定资产的来源，不证明另选权重的来源；加速模型的导出清单保留源权重内的许可、署名和 source/IR 哈希，使用其他权重时须保留其真实来源与适用许可。`THIRD_PARTY.md` 保留仓库资产的许可说明。CPU 与 GPU/NPU 安装均在 `share/yanliu/licenses/chinese-ime-lm/LICENSE` 保留完整 Apache-2.0 许可，在 `share/yanliu/licenses/chinese-ime-training/NOTICE` 保留完整上游署名声明。
 
@@ -19,6 +21,15 @@ CPU 默认安装仓库的 `data/models/sentence-model.safetensors`，即[从随�
 ```sh
 ./packaging/install-local.sh --upgrade
 ```
+
+CPU 升级默认保留已安装、通过哈希校验的模型、原始来源记录和受管理的随包文档；原模型下载目录可以移走。程序、词库和仓库第三方说明仍更新到当前版本。要更换模型时，显式指定包含权重与随包文档的目录，例如：
+
+```sh
+YANLIU_MODEL_DIR=/absolute/path/to/selected-model \
+  ./packaging/install-local.sh --upgrade
+```
+
+要改用仓库当前默认模型，指定 `YANLIU_MODEL_DIR="$PWD/data/models"`。GPU/NPU 升级仍须显式提供源模型、匹配 IR 和 runtime。
 
 升级先校验当前 `installation.json` 及全部受管理文件的 SHA-256，并检查启动入口、组件、环境文件和配置仍指向这份安装。启动入口支持当前符号链接，以及早期安装实际使用、以 `#!/bin/sh`、`set -eu` 和一条 `exec` 转发到受管理服务的精确 755 脚本；不执行脚本，也不接受其他目标或额外命令。安装清单支持当前工具的 `model` 记录，以及本机早期安装实际使用的 `selected_model` / `model_provenance` 记录；其他形状明确拒绝，不猜测迁移。已有配置、启动入口、组件 XML 和环境文件逐字保留。配置的设备需与 `YANLIU_DEVICE` 一致，`data_dir`、显式 `model` 和 `runtime_dir` 需指向受管理目录；外部模型或数据目录应由用户单独维护。
 

@@ -6,16 +6,22 @@ import io
 import json
 import os
 from pathlib import Path
+import sys
 import tempfile
 import threading
 import unittest
 from unittest.mock import patch
 import urllib.error
 
-SPEC = importlib.util.spec_from_file_location("ime_lab", Path(__file__).resolve().parents[1] / "scripts/ime_lab.py")
+ROOT = Path(__file__).resolve().parents[1]
+CACHE = ROOT / ".cache/training-tests"
+CACHE.mkdir(parents=True, exist_ok=True)
+sys.path.insert(0, str(ROOT / "scripts"))
+SPEC = importlib.util.spec_from_file_location("ime_lab", ROOT / "scripts/ime_lab.py")
 lab = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(lab)
 SECRETS = {"OPENAI_API_KEY": "fixture-openai-key", "ANTHROPIC_AUTH_TOKEN": "fixture-anthropic-token"}
+PINYIN_PHRASES = (lab.ROOT / lab.PINYIN_PHRASES).read_bytes()
 
 
 def case(**changes):
@@ -26,15 +32,138 @@ def completion(content):
     return {"choices": [{"message": {"content": content}}]}
 
 
+def snapshot_pinyin_phrases(root):
+    path = root / lab.PINYIN_PHRASES
+    path.parent.mkdir(parents=True)
+    path.write_bytes(PINYIN_PHRASES)
+    return path
+
+
 class ImeLabTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        lab.pinyin_phrases.load_pinyin_phrases(lab.ROOT / lab.PINYIN_PHRASES)
+
     def test_target_pinyin_keeps_phrase_context_but_only_consumes_the_target(self):
         generated = [case(context="银", gold="行", bucket="daily"),
-                     case(context="这是一位行", gold="长", bucket="daily")]
+                     case(context="这是一位行", gold="长", bucket="daily"),
+                     case(context="他跑", gold="得快", bucket="daily")]
         accepted, rejected = lab.select_cases(generated, set(), 1, "a" * 64)
         self.assertEqual(rejected, [])
-        self.assertEqual([row["input"] for row in accepted], ["hang", "zhang"])
+        self.assertEqual([row["input"] for row in accepted], ["hang", "zhang", "dekuai"])
         self.assertEqual(lab.pinyin("行"), "xing")
         self.assertEqual(lab.pinyin("银行"), "yinhang")
+        self.assertEqual(lab.pinyin("便宜"), "pianyi")
+        self.assertEqual(lab.pinyin("系"), "xi")
+        self.assertEqual(lab.pinyin("关系"), "guanxi")
+        self.assertEqual(lab.pinyin("系鞋带"), "jixiedai")
+
+    def test_known_target_phrases_preserve_their_readings_at_the_context_boundary(self):
+        generated = [case(context=context, gold="调试") for context in
+                     ("程序运行时出现异常，需要逐步", "这段代码需要逐步", "程序出错后需要逐步")]
+        generated += [case(context="清晨的湖面笼罩着一层薄", gold="薄雾", bucket="science"),
+                      case(context="请关注", gold="重构")]
+        accepted, rejected = lab.select_cases(generated, set(), 1, "a" * 64)
+        self.assertEqual(rejected, [])
+        self.assertEqual([row["input"] for row in accepted],
+                         ["tiaoshi", "tiaoshi", "tiaoshi", "bowu", "chonggou"])
+        self.assertEqual([(row["context"], row["gold"]) for row in accepted],
+                         [(row["context"], row["gold"]) for row in generated])
+
+    def test_public_phrase_supplement_fixes_confirmed_missing_readings(self):
+        phrases = (("重构", "chonggou", "请把这段代码", "gou"),
+                   ("弹窗", "tanchuang", "用户点击按钮后触发", "chuang"),
+                   ("去重", "quchong", "把重复的记录去掉", "chong"),
+                   ("重命名", "chongmingming", "这条命令可以批量", "ming"),
+                   ("乐声", "yuesheng", "远处传来悠扬的", "sheng"),
+                   ("差旅", "chailv", "", "lv"),
+                   ("代码行", "daimahang", "调试时先定位到出错的", "hang"),
+                   ("认真地", "renzhende", "他正在", "de"),
+                   ("轻轻地", "qingqingde", "他", "de"),
+                   ("系安全带", "jianquandai", "请", "dai"))
+        for phrase, typed, context, suffix in phrases:
+            with self.subTest(phrase=phrase):
+                self.assertEqual(lab.pinyin(phrase), typed)
+                generated = [case(context=context, gold=phrase),
+                             case(context=phrase[:-1], gold=phrase[-1])]
+                accepted, rejected = lab.select_cases(generated, set(), 1, "a" * 64)
+                self.assertEqual(rejected, [])
+                self.assertEqual([row["input"] for row in accepted], [typed, suffix])
+                self.assertEqual([(row["context"], row["gold"]) for row in accepted],
+                                 [(row["context"], row["gold"]) for row in generated])
+
+    def test_adverbial_de_keeps_context_and_following_verb(self):
+        generated = [case(gold="他正在认真地", bucket="daily"),
+                     case(context="认真", gold="地", bucket="daily"),
+                     case(gold="他轻轻地走", bucket="daily")]
+        accepted, rejected = lab.select_cases(generated, set(), 1, "a" * 64)
+        self.assertEqual(rejected, [])
+        self.assertEqual([row["input"] for row in accepted],
+                         ["tazhengzairenzhende", "de", "taqingqingdezou"])
+        self.assertEqual([(row["context"], row["gold"]) for row in accepted],
+                         [(row["context"], row["gold"]) for row in generated])
+
+    def test_seatbelt_compound_keeps_its_reading_inside_longer_targets(self):
+        generated = [case(context="乘车时", gold="必须系安全带", bucket="daily")]
+        accepted, rejected = lab.select_cases(generated, set(), 1, "a" * 64)
+        self.assertEqual(rejected, [])
+        self.assertEqual([row["input"] for row in accepted], ["bixujianquandai"])
+        self.assertEqual(lab.pinyin("这次事故让我亲身体会到了系安全带是多么重要的一件事"),
+                         "zhecishigurangwoqinshentihuidaolejianquandaishiduomezhongyaodeyijianshi")
+
+    def test_phrase_supplement_rejects_invalid_boundary_data(self):
+        invalid = ([], {}, {"重构": ["chong", "gou"]}, {"重构": [["chong"]]},
+                   {"重构": [["chong", "zhong"], ["gou"]]}, {"重构": [["chong"], [None]]},
+                   {"重构": [["chong"], ["gòu"]]}, {"重构": [["chong"], ["gou7"]]},
+                   {"重": [["chong"]]}, {"A构": [["chong"], ["gou"]]})
+        with tempfile.TemporaryDirectory(prefix="yanliu-ime-lab-phrases-", dir=CACHE) as directory:
+            root = Path(directory)
+            path = snapshot_pinyin_phrases(root)
+            with patch.object(lab, "ROOT", root):
+                for value in invalid:
+                    with self.subTest(value=value):
+                        lab.write_json(path, value)
+                        with self.assertRaisesRegex(ValueError, "pinyin phrase"):
+                            lab.pinyin_phrases.load_pinyin_phrases(lab.ROOT / lab.PINYIN_PHRASES)
+                path.write_text("broken JSON", encoding="utf-8")
+                with self.assertRaises(json.JSONDecodeError):
+                    lab.pinyin_phrases.load_pinyin_phrases(lab.ROOT / lab.PINYIN_PHRASES)
+
+    def test_snapshot_requires_valid_phrase_supplement_before_any_request(self):
+        for mode in ([], ["--duration-hours", "0.01"]):
+            for value, error in ((None, FileNotFoundError), (b"broken JSON", json.JSONDecodeError),
+                                 (b"{}", ValueError)):
+                with self.subTest(mode=mode, value=value), tempfile.TemporaryDirectory(prefix="yanliu-ime-lab-invalid-phrases-", dir=CACHE) as directory:
+                    root = Path(directory)
+                    if value is not None:
+                        snapshot_pinyin_phrases(root).write_bytes(value)
+                    output = root / "evidence"
+                    argv = ["ime_lab.py", "--output-dir", str(output), "--endpoint", "https://gateway.example/openai", *mode]
+                    with (patch.object(lab, "ROOT", root), patch.object(lab.sys, "argv", argv),
+                          patch.object(lab.urllib.request, "urlopen") as gateway,
+                          patch.object(lab.subprocess, "run") as cli):
+                        with self.assertRaises(error) as raised:
+                            lab.main()
+                    if value is None:
+                        self.assertEqual(Path(raised.exception.filename), root / lab.PINYIN_PHRASES)
+                    gateway.assert_not_called()
+                    cli.assert_not_called()
+                    self.assertFalse(output.exists())
+
+    def test_snapshot_rejects_wrong_pypinyin_version_before_any_request(self):
+        for mode in ([], ["--duration-hours", "0.01"]):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory(prefix="yanliu-ime-lab-pypinyin-version-", dir=CACHE) as directory:
+                output = Path(directory) / "evidence"
+                argv = ["ime_lab.py", "--output-dir", str(output), "--endpoint", "https://gateway.example/openai", *mode]
+                with (patch.object(lab.sys, "argv", argv),
+                      patch.object(lab.pinyin_phrases, "version", return_value="0.54.0"),
+                      patch.object(lab.urllib.request, "urlopen") as gateway,
+                      patch.object(lab.subprocess, "run") as cli):
+                    with self.assertRaisesRegex(ValueError, "pypinyin must be exactly 0.55.0"):
+                        lab.main()
+                gateway.assert_not_called()
+                cli.assert_not_called()
+                self.assertFalse(output.exists())
 
     def test_bad_teacher_batches_are_recorded_and_accepted_cases_are_checked_once(self):
         first = json.dumps({"cases": [case()]})
@@ -47,8 +176,9 @@ class ImeLabTests(unittest.TestCase):
             ("failed", ['{"cases":[美]}'] * 3, 1, [1, 2, 3], 0),
         )
         for name, contents, code, failed, checked in scenarios:
-            with self.subTest(name), tempfile.TemporaryDirectory(prefix="yanliu-ime-lab-") as directory:
+            with self.subTest(name), tempfile.TemporaryDirectory(prefix="yanliu-ime-lab-", dir=CACHE) as directory:
                 root = Path(directory)
+                snapshot_pinyin_phrases(root)
                 (root / "data/dictionaries").mkdir(parents=True)
                 fixture = root / "fixture"
                 fixture.write_bytes(b"binary and model identity only; never executed")
@@ -76,6 +206,8 @@ class ImeLabTests(unittest.TestCase):
 
                 summary = json.loads((output / "summary.json").read_text(encoding="utf-8"))
                 self.assertEqual(summary["mode"], "general")
+                self.assertEqual(summary["files"]["pinyin_phrases"], lab.sha256(root / lab.PINYIN_PHRASES))
+                self.assertEqual(summary["files"]["pinyin_phrases_loader"], lab.sha256(Path(lab.pinyin_phrases.__file__)))
                 self.assertFalse(summary["generate_only"])
                 self.assertEqual(summary["check_skipped"], not checked)
                 self.assertEqual([record["round"] for record in summary["rounds"] if "error" in record], failed)
@@ -104,8 +236,9 @@ class ImeLabTests(unittest.TestCase):
                         self.assertNotIn(secret.encode(), path.read_bytes())
 
     def test_later_http_failure_preserves_completed_round_cases_and_rejections(self):
-        with tempfile.TemporaryDirectory(prefix="yanliu-ime-lab-checkpoint-") as directory:
+        with tempfile.TemporaryDirectory(prefix="yanliu-ime-lab-checkpoint-", dir=CACHE) as directory:
             root = Path(directory)
+            snapshot_pinyin_phrases(root)
             (root / "data/dictionaries").mkdir(parents=True)
             fixture, output = root / "fixture", root / "evidence"
             fixture.write_bytes(b"bound binary and model; not executed")
@@ -172,8 +305,9 @@ class ImeLabTests(unittest.TestCase):
 
     def test_generate_only_saves_validated_general_cases_without_running_cli(self):
         rows = [case()]
-        with tempfile.TemporaryDirectory(prefix="yanliu-ime-lab-unobserved-") as directory:
+        with tempfile.TemporaryDirectory(prefix="yanliu-ime-lab-unobserved-", dir=CACHE) as directory:
             root = Path(directory)
+            snapshot_pinyin_phrases(root)
             (root / "data/dictionaries").mkdir(parents=True)
             fixture = root / "fixture"
             fixture.write_bytes(b"bound binary and model; not executed")
@@ -199,11 +333,12 @@ class ImeLabTests(unittest.TestCase):
             self.assertEqual(summary["buckets"], {})
             self.assertEqual(summary["files"]["binary"], lab.sha256(fixture))
             self.assertEqual(summary["files"]["model"], lab.sha256(fixture))
+            self.assertEqual(summary["files"]["pinyin_phrases"], lab.sha256(root / lab.PINYIN_PHRASES))
             self.assertEqual(json.loads((output / "round-001-response.body").read_text()), response)
             self.assertTrue((output / "round-001-request.json").exists())
 
     def test_pairs_are_validated_with_fixed_pinyin_before_generation(self):
-        with tempfile.TemporaryDirectory(prefix="yanliu-ime-lab-pairs-") as directory:
+        with tempfile.TemporaryDirectory(prefix="yanliu-ime-lab-pairs-", dir=CACHE) as directory:
             path = Path(directory) / "pairs.json"
             pairs = [["意识", "仪式"], ["实际", "时机"]]
             lab.write_json(path, pairs)
@@ -227,8 +362,9 @@ class ImeLabTests(unittest.TestCase):
 
     def test_pair_mode_assigns_words_in_order_and_rejects_unrequested_targets(self):
         pairs = [["意识", "仪式"], ["实际", "时机"], ["形式", "行驶"]]
-        with tempfile.TemporaryDirectory(prefix="yanliu-ime-lab-fixed-pairs-") as directory:
+        with tempfile.TemporaryDirectory(prefix="yanliu-ime-lab-fixed-pairs-", dir=CACHE) as directory:
             root = Path(directory)
+            snapshot_pinyin_phrases(root)
             (root / "data/dictionaries").mkdir(parents=True)
             fixture, source, output = root / "fixture", root / "pairs.json", root / "evidence"
             fixture.write_bytes(b"not executed")
@@ -265,6 +401,7 @@ class ImeLabTests(unittest.TestCase):
             summary = json.loads((output / "summary.json").read_text(encoding="utf-8"))
             self.assertEqual(summary["mode"], "pairs")
             self.assertEqual(summary["files"]["pairs"], lab.sha256(source))
+            self.assertEqual(summary["files"]["pinyin_phrases"], lab.sha256(root / lab.PINYIN_PHRASES))
             self.assertEqual([row["pair_range"] for row in summary["rounds"]],
                              [{"start": 0, "end": 2}, {"start": 2, "end": 3}])
             self.assertEqual([item["reason"] for row in summary["rounds"] for item in row["rejected"]],
@@ -318,7 +455,7 @@ class ImeLabTests(unittest.TestCase):
         self.addCleanup(server.server_close)
         self.addCleanup(server.shutdown)
         endpoint = f"http://127.0.0.1:{server.server_port}"
-        with tempfile.TemporaryDirectory(prefix="yanliu-ime-lab-http-") as directory, \
+        with tempfile.TemporaryDirectory(prefix="yanliu-ime-lab-http-", dir=CACHE) as directory, \
                 patch.dict(os.environ, {"no_proxy": "*"}):
             output = Path(directory)
             self.assertEqual(lab.request_teacher(endpoint + "/ok", {}, 5, output, "ok")[0], {"choices": []})
@@ -331,8 +468,9 @@ class ImeLabTests(unittest.TestCase):
             self.assertIn("fixture unavailable", raised.exception.__notes__[0])
 
     def test_continuous_batches_are_checked_and_issues_deduplicated_before_deadline(self):
-        with tempfile.TemporaryDirectory(prefix="yanliu-ime-lab-continuous-") as directory:
+        with tempfile.TemporaryDirectory(prefix="yanliu-ime-lab-continuous-", dir=CACHE) as directory:
             root = Path(directory)
+            snapshot_pinyin_phrases(root)
             (root / "data/dictionaries").mkdir(parents=True)
             (root / "data/dictionaries/test.dict.yaml").write_text("public fixture")
             fixture, output = root / "fixture", root / "evidence"
@@ -380,7 +518,9 @@ class ImeLabTests(unittest.TestCase):
                 gateway.side_effect = lambda *args, **kwargs: io.BytesIO(json.dumps(response).encode())
                 self.assertEqual(lab.main(), 0)
             summary = json.loads((output / "summary.json").read_text())
+            self.assertEqual(summary["files"]["pinyin_phrases"], lab.sha256(root / lab.PINYIN_PHRASES))
             self.assertEqual(summary["completed_rounds"], 2)
+            self.assertEqual(summary["files"]["pinyin_phrases_loader"], lab.sha256(Path(lab.pinyin_phrases.__file__)))
             self.assertEqual(summary["cases"], 4)
             self.assertEqual(summary["usage"]["total_tokens"], 120)
             self.assertEqual(summary["buckets"]["all"]["breakages"], 2)
@@ -392,9 +532,60 @@ class ImeLabTests(unittest.TestCase):
             self.assertEqual(len((output / "cases.jsonl").read_text().splitlines()), 4)
             self.assertEqual(len(evaluated), 2)
 
+    def test_continuous_annotation_dependency_change_stops_before_the_next_request(self):
+        for changed in ("pinyin_phrases", "pinyin_phrases_loader"):
+            with self.subTest(changed=changed), tempfile.TemporaryDirectory(prefix="yanliu-ime-lab-dependency-change-", dir=CACHE) as directory:
+                root = Path(directory)
+                phrases = snapshot_pinyin_phrases(root)
+                loader = root / "pinyin_phrases.py"
+                loader.write_bytes(Path(lab.pinyin_phrases.__file__).read_bytes())
+                spec = importlib.util.spec_from_file_location("ime_fixture_phrases", loader)
+                helper = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(helper)
+                dependencies = {"pinyin_phrases": phrases, "pinyin_phrases_loader": loader}
+                initial_hashes = {key: lab.sha256(path) for key, path in dependencies.items()}
+                (root / "data/dictionaries").mkdir(parents=True)
+                (root / "data/dictionaries/test.dict.yaml").write_text("public fixture")
+                fixture, output = root / "fixture", root / "evidence"
+                fixture.write_bytes(b"bound assets; not executed")
+                response = completion(json.dumps({"cases": [case(gold="重构")]}))
+
+                def cli(command, **kwargs):
+                    rows = [json.loads(line) for line in Path(command[command.index("--data") + 1]).read_text().splitlines()]
+                    self.assertEqual(rows[0]["input"], "chonggou")
+                    lab.write_json(Path(command[command.index("--output") + 1]), {
+                        "format": "yanliu-candidate-check-v1", "buckets": {"all": {"n": 1}},
+                        "rows": [{"id": rows[0]["id"], "rank": 1, "static_rank": 1, "candidates": []}],
+                    })
+
+                def change_dependency(_seconds):
+                    dependency = dependencies[changed]
+                    dependency.write_bytes(dependency.read_bytes() + b"\n")
+
+                argv = ["ime_lab.py", "--output-dir", str(output), "--binary", str(fixture), "--model", str(fixture),
+                        "--dictionary-dir", str(root / "data/dictionaries"), "--endpoint", "https://gateway.example/openai",
+                        "--duration-hours", "0.01", "--interval-seconds", "0"]
+                with (patch.object(lab, "ROOT", root), patch.object(lab, "pinyin_phrases", helper),
+                      patch.object(lab.sys, "argv", argv),
+                      patch.object(lab.urllib.request, "urlopen", return_value=io.BytesIO(json.dumps(response).encode())) as gateway,
+                      patch.object(lab.subprocess, "run", cli), patch.object(lab.time, "sleep", change_dependency),
+                      patch.object(lab.signal, "signal"), patch.object(lab.signal, "setitimer"),
+                      redirect_stdout(io.StringIO())):
+                    with self.assertRaisesRegex(ValueError, "pinyin phrases or loader.*changed during the run"):
+                        lab.main()
+                self.assertEqual(gateway.call_count, 1)
+                summary = json.loads((output / "summary.json").read_text())
+                for key, initial_hash in initial_hashes.items():
+                    self.assertEqual(summary["files"][key], initial_hash)
+                self.assertNotEqual(initial_hashes[changed], lab.sha256(dependencies[changed]))
+                self.assertEqual(summary["status"], "failed")
+                self.assertEqual(summary["completed_rounds"], 1)
+                self.assertEqual(len((output / "cases.jsonl").read_text().splitlines()), 1)
+
     def test_continuous_http_failure_preserves_first_batch_and_reports_original_failure(self):
-        with tempfile.TemporaryDirectory(prefix="yanliu-ime-lab-continuous-error-") as directory:
+        with tempfile.TemporaryDirectory(prefix="yanliu-ime-lab-continuous-error-", dir=CACHE) as directory:
             root = Path(directory)
+            snapshot_pinyin_phrases(root)
             (root / "data/dictionaries").mkdir(parents=True)
             (root / "data/dictionaries/test.dict.yaml").write_text("public fixture")
             fixture, output = root / "fixture", root / "evidence"
@@ -429,8 +620,9 @@ class ImeLabTests(unittest.TestCase):
             self.assertTrue((output / "round-001-check.json").exists())
 
     def test_continuous_deadline_timeout_reaps_a_waiting_cli(self):
-        with tempfile.TemporaryDirectory(prefix="yanliu-ime-lab-deadline-") as directory:
+        with tempfile.TemporaryDirectory(prefix="yanliu-ime-lab-deadline-", dir=CACHE) as directory:
             root = Path(directory)
+            snapshot_pinyin_phrases(root)
             (root / "data/dictionaries").mkdir(parents=True)
             (root / "data/dictionaries/test.dict.yaml").write_text("public fixture")
             fixture, output, pid = root / "fixture", root / "evidence", root / "child.pid"
@@ -481,8 +673,9 @@ class ImeLabTests(unittest.TestCase):
             write_json(path, value)
             json.loads(path.read_text())
 
-        with tempfile.TemporaryDirectory(prefix="yanliu-ime-lab-http-deadline-") as directory:
+        with tempfile.TemporaryDirectory(prefix="yanliu-ime-lab-http-deadline-", dir=CACHE) as directory:
             root = Path(directory)
+            snapshot_pinyin_phrases(root)
             (root / "data/dictionaries").mkdir(parents=True)
             (root / "data/dictionaries/test.dict.yaml").write_text("public fixture")
             fixture, output = root / "fixture", root / "evidence"

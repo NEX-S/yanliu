@@ -60,6 +60,31 @@ unified model license is claimed for these mixed-source weights. Package
 `LICENSE`, `NOTICE`, README and provenance travel with the installed model;
 the inference library's Apache-2.0 license remains separate.
 
+### Source review, 2026-10-23
+
+The frozen model documents record NaturalConv as having no license declared in
+the dataset card. This is incomplete: the training source revision
+`adb38574e8014ada1d8404247167582e76b22d05` also contains a
+[Tencent NaturalConv LICENSE](https://huggingface.co/datasets/xywang1/NaturalConv/blob/adb38574e8014ada1d8404247167582e76b22d05/LICENSE).
+The retrieved 3,634-byte license has SHA-256
+`b51724699c7602950328471609ef586995eb7ecb870a93bc45eea79cd1a9946e`.
+Section 3 limits the grant to personal, non-commercial scientific research,
+development, testing and specified academic/event uses; section 4 restricts
+redistribution and other uses of the dataset and its derivative works. The
+[authors' repository](https://github.com/naturalconv/NaturalConvDataSet) also
+states that the dataset is for non-commercial use.
+
+This supplements the historical source declarations; it does not change the
+fixed model packages or decide whether a trained weight is a derivative work
+under those terms. Those packages and local continuations have not been cleared
+for unrestricted commercial use or assigned a unified open-source model license.
+The recorded COIG-CQIA and TNEWS permission gaps also remain unresolved.
+
+The installer copies this third-party notice on installation and upgrade;
+existing installations keep their current copy until then, and rollback restores
+the previous copy. The installer does not assess permitted uses. Further source
+and version details are in `data/model-cards/SOURCE-REVIEW.md` in the source tree.
+
 ## Previous default language model
 
 The weight is `sentence-model.safetensors`, asset 572758937 of the
@@ -98,6 +123,13 @@ prefixes as context. Every case keeps its author, sentence URL and license in
 author and timestamps. `eval/replay-v3.NOTICE` states the attribution,
 `eval/replay-v3.lock.json` the selection rules and source hashes, and
 `eval/replay-v3-artifacts.json` the generated file hashes.
+
+`eval/annotation-repairs-v1.jsonl` adapts three sentences from that DEV
+split by correcting only the distributive adverb 都 from `du` to `dou`.
+Each row retains the original author, sentence URL, CC BY 2.0 FR license,
+group, old input and original JSONL line hash and position. The historical
+replay files are unchanged. Sentence 677501 also appears in
+`eval/pronunciation-dev-v1.jsonl`; these are overlapping diagnostics.
 
 ## Optional native acceleration
 

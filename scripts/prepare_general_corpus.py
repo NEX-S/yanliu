@@ -32,19 +32,23 @@ SOURCE_FILES = {
     "lccc": [("lccc-train-00000.parquet", "thu-coai/lccc", "81d998c10513b24cd560be3448d693e80d753fdc", "base/lccc-train-00000-of-00002.parquet", "1e8bbfff077ec1a7c74672d156f93b1d443ed8f240383ac3a317eb2afa6a5e5f")],
     "wiki": [("wiki-train-00000.parquet", "wikimedia/wikipedia", "b04c8d1ceb2f5cd4588862100d08de323dccfbaa", "20231101.zh/train-00000-of-00006.parquet", "853ddf4a138c792ad7386d6de831788f96326c03e1e3349f7a315498392e8b56"),
              ("wiki-train-00002.parquet", "wikimedia/wikipedia", "b04c8d1ceb2f5cd4588862100d08de323dccfbaa", "20231101.zh/train-00002-of-00006.parquet", "ec8f6c0dd1418b8fcd454278fb4f2bc7cd0ce8312f29c80b672533942601338f")],
-    "cqia": [("cqia-zhihu9.jsonl", "m-a-p/COIG-CQIA", "8b55868c6168adf86c30e7ca0f782cca1c514297", "zhihu/zhihu_score9.0-10_clean_v10.jsonl", None),
-             ("cqia-zhihu85.jsonl", "m-a-p/COIG-CQIA", "8b55868c6168adf86c30e7ca0f782cca1c514297", "zhihu/zhihu_score8.5-9.0_clean_v4.jsonl", None),
-             ("cqia-zhihu8.jsonl", "m-a-p/COIG-CQIA", "8b55868c6168adf86c30e7ca0f782cca1c514297", "zhihu/zhihu_score8.0-8.5_clean_v3.jsonl", None),
+    "cqia": [("cqia-zhihu9.jsonl", "m-a-p/COIG-CQIA", "8b55868c6168adf86c30e7ca0f782cca1c514297", "zhihu/zhihu_score9.0-10_clean_v10.jsonl", "3263b3c24c94bdb6ad3b9b547594aa1b5c4d3786fa456780c893af28ca86ab20"),
+             ("cqia-zhihu85.jsonl", "m-a-p/COIG-CQIA", "8b55868c6168adf86c30e7ca0f782cca1c514297", "zhihu/zhihu_score8.5-9.0_clean_v4.jsonl", "86e277a63251c019a11360274e76c0d0b0e76b5b2559d7d7fb1a5273e6b4ffa4"),
+             ("cqia-zhihu8.jsonl", "m-a-p/COIG-CQIA", "8b55868c6168adf86c30e7ca0f782cca1c514297", "zhihu/zhihu_score8.0-8.5_clean_v3.jsonl", "2dd9954e8ad41eee9b0c0823938f299472779b0757234a237c56f83d1fac6a86"),
              ("cqia-wikihow.jsonl", "m-a-p/COIG-CQIA", "8b55868c6168adf86c30e7ca0f782cca1c514297", "wikihow/wikihow.jsonl", "ec172b8616c589bc28b5be5c77ae4b0659e401184848127517bc8352497d57ca"),
-             ("cqia-zgbk.jsonl", "m-a-p/COIG-CQIA", "8b55868c6168adf86c30e7ca0f782cca1c514297", "wiki/zgbk.jsonl", None),
-             ("cqia-book-introduce.jsonl", "m-a-p/COIG-CQIA", "8b55868c6168adf86c30e7ca0f782cca1c514297", "douban/book_introduce.jsonl", None),
-             ("cqia-book-reviews.jsonl", "m-a-p/COIG-CQIA", "8b55868c6168adf86c30e7ca0f782cca1c514297", "douban/book_reviews.jsonl", None),
-             ("cqia-movie-reviews.jsonl", "m-a-p/COIG-CQIA", "8b55868c6168adf86c30e7ca0f782cca1c514297", "douban/movie_reviews.jsonl", None),
-             ("cqia-tv-reviews.jsonl", "m-a-p/COIG-CQIA", "8b55868c6168adf86c30e7ca0f782cca1c514297", "douban/tv_reviews.jsonl", None)],
+             ("cqia-zgbk.jsonl", "m-a-p/COIG-CQIA", "8b55868c6168adf86c30e7ca0f782cca1c514297", "wiki/zgbk.jsonl", "d1e3dac5eeb90541dbe39a20629eb2e5f7315f19796da7bba308b92e905591ed"),
+             ("cqia-book-introduce.jsonl", "m-a-p/COIG-CQIA", "8b55868c6168adf86c30e7ca0f782cca1c514297", "douban/book_introduce.jsonl", "3fb7401db5a8d21423ce8befabfd22ed67e9d43d73d88504f20fe471bf463e0b"),
+             ("cqia-book-reviews.jsonl", "m-a-p/COIG-CQIA", "8b55868c6168adf86c30e7ca0f782cca1c514297", "douban/book_reviews.jsonl", "c72d6b7c88f233846aeda9576dc0c1a9d7cc1e0b5e4e5626e7fa4408c7352648"),
+             ("cqia-movie-reviews.jsonl", "m-a-p/COIG-CQIA", "8b55868c6168adf86c30e7ca0f782cca1c514297", "douban/movie_reviews.jsonl", "60ba054a3973e9301316efaa1525b27202e5dc8ef5c6878acc9813c067c13336"),
+             ("cqia-tv-reviews.jsonl", "m-a-p/COIG-CQIA", "8b55868c6168adf86c30e7ca0f782cca1c514297", "douban/tv_reviews.jsonl", "db5cb354a8db1447d54ce2878b5b114e52b3fd02707e4b1c622d4dad6f52bc57")],
     "tnews": [("tnews-train.parquet", "clue/clue", "28178267a609dd08bdc703dd6c931dfc2c2f4431", "tnews/train-00000-of-00001.parquet", "57ad8b1a5a6a4120a283468f5a828a2702b742139a1878e1edcd7b8b59eec5de")],
 }
 ATTRIBUTIONS = {
-    "naturalconv": {"declared_license": "not declared in dataset card; retain original source", "data_card": "https://huggingface.co/datasets/xywang1/NaturalConv/tree/adb38574e8014ada1d8404247167582e76b22d05", "citation": "Wang et al. (2021), NaturalConv: A Chinese Dialogue Dataset Towards Multi-turn Topic-driven Conversation; https://arxiv.org/abs/2103.02548"},
+    "naturalconv": {"declared_license": "Tencent NaturalConv dataset license; non-commercial use only",
+                    "license_url": "https://huggingface.co/datasets/xywang1/NaturalConv/raw/adb38574e8014ada1d8404247167582e76b22d05/LICENSE",
+                    "license_sha256": "b51724699c7602950328471609ef586995eb7ecb870a93bc45eea79cd1a9946e",
+                    "license_restrictions": "Sections 3-4 limit permitted purposes and restrict data/derivative-work redistribution, resale and supply outside Tencent. Whether trained weights are derivative works requires separate review; no general commercial-use or redistribution permission is asserted.",
+                    "data_card": "https://huggingface.co/datasets/xywang1/NaturalConv/tree/adb38574e8014ada1d8404247167582e76b22d05", "citation": "Wang et al. (2021), NaturalConv: A Chinese Dialogue Dataset Towards Multi-turn Topic-driven Conversation; https://arxiv.org/abs/2103.02548"},
     "cped": {"declared_license": "Apache-2.0 repository license; original TV dialogue source retained", "license_url": "https://raw.githubusercontent.com/scutcyr/CPED/1e4b81c28a123f22387e06664f37e5dc9322380f/LICENSE", "data_card": "https://github.com/scutcyr/CPED/tree/1e4b81c28a123f22387e06664f37e5dc9322380f", "citation": "Chen et al. (2022), CPED: A Large-Scale Chinese Personalized and Emotional Dialogue Dataset for Conversational AI; text only, no speaker or visual annotations"},
     "lccc": {"declared_license": "MIT", "data_card": "https://huggingface.co/datasets/thu-coai/lccc/raw/9022ba27075f75c2f59d57d7fa5f42e8d1151aec/README.md", "citation": "Wang, Yida et al. (2020), A Large-Scale Chinese Short-Text Conversation Dataset, NLPCC; https://arxiv.org/abs/2008.03946"},
     "wiki": {"declared_license": "CC-BY-SA-3.0 and GFDL (version not specified in card)", "data_card": "https://huggingface.co/datasets/wikimedia/wikipedia/raw/b04c8d1ceb2f5cd4588862100d08de323dccfbaa/README.md", "citation": "Wikimedia Wikipedia 2023-11-01 Chinese dump; original article id/url/title retained in raw Parquet"},
@@ -288,7 +292,7 @@ def make_specs(output, sources, dictionary, frequencies, attribution):
     vocab, coverage = vocabulary(sources, dictionary, frequencies)
     provenance = {"license": "Mixed public sources; per-source attribution retained in data-recipe.json",
                   "data_classification": "public Chinese text, grouped held-out split; no private conversations or system learning",
-                  "attribution": attribution}
+                  "attribution": attribution, "source_attributions": ATTRIBUTIONS}
     for name, layers, width, heads in (("compact", 6, 192, 4), ("small", 6, 256, 4), ("large", 8, 448, 8)):
         write_json(output / f"{name}-spec.json", {"config": {"vocab": len(vocab), "n_layer": layers,
                    "n_head": heads, "n_embd": width, "context": 64, "dropout": 0.1},
@@ -323,7 +327,7 @@ def main():
         for filename, repo, revision, remote, expected in files:
             path = sources / filename
             actual = digest(path)
-            if expected is not None and actual != expected:
+            if actual != expected:
                 raise ValueError(f"{path}: SHA256 mismatch: expected {expected}, got {actual}")
             manifest.append({"source": source, "path": str(path), "sha256": actual, "bytes": path.stat().st_size,
                              "url": (f"https://raw.githubusercontent.com/{repo}/{revision}/{remote}" if source == "cped"

@@ -90,11 +90,15 @@ fn main() -> Result<()> {
     match args.command {
         Command::Decode { input, context } => {
             let (decoder, mut model) = assets()?;
-            let mut session = Session::new(decoder, None);
+            let mut session = Session::new(decoder.clone(), None);
             session.insert(&input)?;
             session.set_context(&context);
             if let Some(model) = &mut model {
-                promote(model, &mut session)?;
+                let mut snapshot = session.snapshot();
+                let promotion = model
+                    .refine(&mut snapshot, &decoder, || true)?
+                    .expect("synchronous CLI inference cannot be cancelled");
+                session.apply_candidates(snapshot.revision, snapshot.candidates, promotion.index);
             }
             for (i, c) in session.candidates().iter().enumerate() {
                 println!(
@@ -131,14 +135,6 @@ fn main() -> Result<()> {
             let state = yanliu::learning::list(&directory)?;
             println!("{}", serde_json::to_string_pretty(&state)?);
         }
-    }
-    Ok(())
-}
-
-fn promote(model: &mut Model, session: &mut Session) -> Result<()> {
-    let snapshot = session.snapshot();
-    if let Some(index) = model.promotion(&snapshot)? {
-        session.apply_promotion(snapshot.revision, index);
     }
     Ok(())
 }

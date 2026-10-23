@@ -13,7 +13,7 @@ use std::{
 };
 use zbus::{
     Connection, ObjectServer, interface,
-    object_server::SignalEmitter,
+    object_server::{Interface, SignalEmitter},
     zvariant::{OwnedObjectPath, OwnedValue, Structure, StructureBuilder, Value},
 };
 
@@ -179,7 +179,7 @@ impl RankJob {
     fn current(&self) -> bool {
         self.generation.load(Ordering::Acquire) == self.serial
     }
-    async fn publish(&self, index: usize) -> zbus::Result<()> {
+    async fn publish(self, preferred: Option<usize>) -> zbus::Result<()> {
         let server = self.emitter.connection().object_server();
         // Only Destroy removes an engine, and it made this job stale first.
         let interface = match server.interface::<_, Engine>(self.emitter.path()).await {
@@ -189,9 +189,12 @@ impl RankJob {
         };
         let mut engine = interface.get_mut().await;
         if self.current()
-            && engine
-                .session
-                .apply_promotion(self.snapshot.revision, index)
+            && (preferred.is_some() || self.snapshot.candidates != engine.session.candidates())
+            && engine.session.apply_candidates(
+                self.snapshot.revision,
+                self.snapshot.candidates,
+                preferred,
+            )
         {
             engine.publish(&self.emitter).await?;
         }
@@ -236,7 +239,7 @@ impl RankQueue {
 }
 
 /// The service's single model thread. It ranks one job at a time and publishes
-/// the promotion itself; dropping the worker stops it.
+/// the refined candidates itself; dropping the worker stops it.
 pub struct RankingWorker {
     queue: Arc<RankQueue>,
 }
@@ -244,6 +247,7 @@ impl RankingWorker {
     /// `report` receives the cause when ranking fails; the thread then exits.
     pub fn start(
         mut model: Model,
+        decoder: Arc<Decoder>,
         report: impl Fn(String) + Send + 'static,
     ) -> std::io::Result<Self> {
         let queue = Arc::new(RankQueue::default());
@@ -254,7 +258,7 @@ impl RankingWorker {
             .spawn(move || {
                 let run = std::panic::catch_unwind(AssertUnwindSafe(|| {
                     loop {
-                        let job = {
+                        let mut job = {
                             let state = jobs.state.lock().expect("ranking queue poisoned");
                             let mut state = jobs
                                 .ready
@@ -270,13 +274,17 @@ impl RankingWorker {
                         if !job.current() {
                             continue;
                         }
-                        let index = match model.promotion(&job.snapshot) {
-                            Ok(Some(index)) => index,
+                        let generation = job.generation.clone();
+                        let serial = job.serial;
+                        let preferred = match model.refine(&mut job.snapshot, &decoder, || {
+                            generation.load(Ordering::Acquire) == serial
+                        }) {
+                            Ok(Some(promotion)) => promotion.index,
                             Ok(None) => continue,
                             Err(error) => return Err(format!("ranking inference failed: {error}")),
                         };
-                        if let Err(error) = runtime.block_on(job.publish(index)) {
-                            let path = job.emitter.path();
+                        let path = job.emitter.path().to_owned();
+                        if let Err(error) = runtime.block_on(job.publish(preferred)) {
                             return Err(format!("ranking publisher at {path}: {error}"));
                         }
                     }
@@ -337,6 +345,8 @@ impl Factory {
             .at(&path, Engine::new(session, self.queue.clone()))
             .await?;
         server.at(&path, Service).await?;
+        server.remove::<zbus::fdo::Properties, _>(&path).await?;
+        server.at(&path, EngineProperties).await?;
         Ok(path)
     }
 }
@@ -366,6 +376,103 @@ impl Service {
         server.remove::<Service, _>(path).await?;
         Ok(())
     }
+}
+
+// zbus's automatic Properties interface spawns calls independently of Engine.
+// ContentType must finish before the next key received on the connection.
+struct EngineProperties;
+impl EngineProperties {
+    fn has_engine_properties(interface: &str) -> zbus::fdo::Result<bool> {
+        match interface {
+            "org.freedesktop.IBus.Engine" => Ok(true),
+            "org.freedesktop.IBus.Service"
+            | "org.freedesktop.DBus.Properties"
+            | "org.freedesktop.DBus.Introspectable"
+            | "org.freedesktop.DBus.Peer" => Ok(false),
+            _ => Err(zbus::fdo::Error::UnknownInterface(interface.into())),
+        }
+    }
+}
+#[interface(name = "org.freedesktop.DBus.Properties", spawn = false)]
+impl EngineProperties {
+    async fn get(
+        &self,
+        interface_name: zbus::names::InterfaceName<'_>,
+        property_name: &str,
+        #[zbus(object_server)] server: &ObjectServer,
+        #[zbus(connection)] connection: &Connection,
+        #[zbus(header)] header: zbus::message::Header<'_>,
+        #[zbus(signal_emitter)] emitter: SignalEmitter<'_>,
+    ) -> zbus::fdo::Result<OwnedValue> {
+        if Self::has_engine_properties(interface_name.as_str())? {
+            let engine = server.interface::<_, Engine>(emitter.path()).await?;
+            if let Some(result) = engine
+                .get()
+                .await
+                .get(property_name, server, connection, Some(&header), &emitter)
+                .await
+            {
+                return result;
+            }
+        }
+        Err(zbus::fdo::Error::UnknownProperty(property_name.into()))
+    }
+    #[allow(clippy::too_many_arguments)]
+    async fn set(
+        &self,
+        interface_name: zbus::names::InterfaceName<'_>,
+        property_name: &str,
+        value: Value<'_>,
+        #[zbus(object_server)] server: &ObjectServer,
+        #[zbus(connection)] connection: &Connection,
+        #[zbus(header)] header: zbus::message::Header<'_>,
+        #[zbus(signal_emitter)] emitter: SignalEmitter<'_>,
+    ) -> zbus::fdo::Result<()> {
+        if Self::has_engine_properties(interface_name.as_str())? {
+            let engine = server.interface::<_, Engine>(emitter.path()).await?;
+            if let Some(result) = engine
+                .get_mut()
+                .await
+                .set_mut(
+                    property_name,
+                    &value,
+                    server,
+                    connection,
+                    Some(&header),
+                    &emitter,
+                )
+                .await
+            {
+                return result;
+            }
+        }
+        Err(zbus::fdo::Error::UnknownProperty(property_name.into()))
+    }
+    async fn get_all(
+        &self,
+        interface_name: zbus::names::InterfaceName<'_>,
+        #[zbus(object_server)] server: &ObjectServer,
+        #[zbus(connection)] connection: &Connection,
+        #[zbus(header)] header: zbus::message::Header<'_>,
+        #[zbus(signal_emitter)] emitter: SignalEmitter<'_>,
+    ) -> zbus::fdo::Result<HashMap<String, OwnedValue>> {
+        if Self::has_engine_properties(interface_name.as_str())? {
+            let engine = server.interface::<_, Engine>(emitter.path()).await?;
+            return engine
+                .get()
+                .await
+                .get_all(server, connection, Some(&header), &emitter)
+                .await;
+        }
+        Ok(HashMap::new())
+    }
+    #[zbus(signal)]
+    async fn properties_changed(
+        emitter: &SignalEmitter<'_>,
+        interface_name: zbus::names::InterfaceName<'_>,
+        changed_properties: HashMap<&str, Value<'_>>,
+        invalidated_properties: Vec<&str>,
+    ) -> zbus::Result<()>;
 }
 
 struct Engine {
@@ -712,8 +819,11 @@ impl Engine {
         }
         // Replacement starts at the earlier end of the selection in either direction.
         let context: String = text.chars().take(cursor.min(anchor) as usize).collect();
-        self.session.set_context(&context);
-        self.rank(&emitter);
+        if self.session.set_context(&context) {
+            self.cursor = 0;
+            self.publish(&emitter).await?;
+            self.rank(&emitter);
+        }
         Ok(())
     }
     async fn candidate_clicked(
@@ -921,6 +1031,11 @@ mod tests {
                 .await
                 .unwrap();
             server.at(path.as_str(), Service).await.unwrap();
+            server
+                .remove::<zbus::fdo::Properties, _>(path.as_str())
+                .await
+                .unwrap();
+            server.at(path.as_str(), EngineProperties).await.unwrap();
             let proxy = Proxy::new_owned(
                 self.client.clone(),
                 self.connection.unique_name().unwrap().to_owned(),
@@ -1256,10 +1371,10 @@ mod tests {
         );
         // The stale "n" job publishes nothing; the "ni" job promotes a full
         // conversion and leaves the partial completion in place.
-        stale.publish(1).await.unwrap();
+        stale.publish(Some(1)).await.unwrap();
         let current = take_job(&queue);
         assert_eq!(current.snapshot.input, "ni");
-        current.publish(1).await.unwrap();
+        current.publish(Some(1)).await.unwrap();
         assert_eq!(auxiliary(&mut signals).await, ("ni▏".into(), true));
         expected[..=1].rotate_right(1);
         assert_eq!(engine.get().await.session.candidates(), expected);
@@ -1359,7 +1474,7 @@ mod tests {
         let shown = engine.get().await.session.candidates().to_vec();
         assert!(key(&proxy, KEYSYM_DOWN).await);
         assert!(wait_lookup(&mut signals).await);
-        pending.publish(1).await.unwrap();
+        pending.publish(Some(1)).await.unwrap();
         {
             let engine = engine.get().await;
             assert_eq!(engine.cursor, 1);
@@ -1429,8 +1544,8 @@ mod tests {
                 assert!(rows.iter().eq(shown.iter().map(|c| &c.text)));
             }
             // The in-flight "n" job and the queued "ni" job are both stale.
-            first.publish(1).await.unwrap();
-            take_job(&queue).publish(1).await.unwrap();
+            first.publish(Some(1)).await.unwrap();
+            take_job(&queue).publish(Some(1)).await.unwrap();
             {
                 let engine = engine.get().await;
                 assert_eq!(engine.cursor, final_page * PAGE_SIZE);
@@ -1516,6 +1631,205 @@ mod tests {
         }
     }
 
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn password_property_precedes_keys_sent_without_waiting_for_its_reply() {
+        let bus = TestBus::new().await;
+        let learning = Arc::new(Learning::new(false));
+        let (proxy, engine) = bus
+            .engine(
+                &Arc::default(),
+                1,
+                Session::new(decoder(FIXTURE), Some(learning.clone())),
+            )
+            .await;
+        for _ in 0..200 {
+            proxy
+                .set_property("ContentType", (0_u32, 0_u32))
+                .await
+                .unwrap();
+            let message = Message::method_call(proxy.path(), "Set")
+                .unwrap()
+                .destination(proxy.destination())
+                .unwrap()
+                .interface("org.freedesktop.DBus.Properties")
+                .unwrap()
+                .build(&(
+                    Engine::name(),
+                    "ContentType",
+                    Value::from((INPUT_PURPOSE_PASSWORD, 0_u32)),
+                ))
+                .unwrap();
+            bus.client.send(&message).await.unwrap();
+            assert!(!key(&proxy, u32::from(b'n')).await);
+            let engine = engine.get().await;
+            assert!(engine.sensitive);
+            assert!(engine.session.input().is_empty());
+            assert!(engine.session.context().is_empty());
+        }
+        assert_eq!(learning.revision(), 0);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn ordered_properties_keep_get_set_errors_and_are_removed_with_the_engine() {
+        let bus = TestBus::new().await;
+        let (proxy, _) = bus
+            .engine(&Arc::default(), 1, Session::new(decoder(FIXTURE), None))
+            .await;
+        assert!(proxy.get_property::<bool>("FocusId").await.unwrap());
+        assert!(
+            proxy
+                .get_property::<bool>("ActiveSurroundingText")
+                .await
+                .unwrap()
+        );
+        let properties = Proxy::new(
+            &bus.client,
+            proxy.destination(),
+            proxy.path(),
+            "org.freedesktop.DBus.Properties",
+        )
+        .await
+        .unwrap();
+        let all: HashMap<String, OwnedValue> =
+            properties.call("GetAll", &(Engine::name(),)).await.unwrap();
+        assert_eq!(all.len(), 2);
+        assert!(bool::try_from(&all["FocusId"]).unwrap());
+        let empty: HashMap<String, OwnedValue> = properties
+            .call("GetAll", &(Service::name(),))
+            .await
+            .unwrap();
+        assert!(empty.is_empty());
+        for (interface, property, value, expected) in [
+            (
+                Engine::name().as_str(),
+                "FocusId",
+                Value::from(false),
+                "UnknownProperty",
+            ),
+            (
+                Engine::name().as_str(),
+                "ContentType",
+                Value::from("bad"),
+                "zbus.Error",
+            ),
+            (
+                "org.example.Unknown",
+                "ContentType",
+                Value::from((0_u32, 0_u32)),
+                "UnknownInterface",
+            ),
+        ] {
+            let error = properties
+                .call::<_, _, ()>("Set", &(interface, property, value))
+                .await
+                .unwrap_err();
+            assert!(
+                matches!(&error, zbus::Error::MethodError(name, _, _) if name.as_str().ends_with(expected)),
+                "{property}: {error}; expected {expected}"
+            );
+        }
+        let service = Proxy::new(
+            &bus.client,
+            proxy.destination(),
+            proxy.path(),
+            Service::name(),
+        )
+        .await
+        .unwrap();
+        service.call::<_, _, ()>("Destroy", &()).await.unwrap();
+        assert!(
+            properties
+                .call::<_, _, HashMap<String, OwnedValue>>("GetAll", &(Service::name(),))
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn surrounding_updates_publish_the_menu_used_by_space_digits_and_clicks() {
+        let bus = TestBus::new().await;
+        for (id, (changed, selection)) in [false, true]
+            .into_iter()
+            .flat_map(|changed| (0..3).map(move |selection| (changed, selection)))
+            .enumerate()
+        {
+            let queue = Arc::default();
+            let (proxy, engine) = bus
+                .engine(&queue, id as u64, Session::new(decoder(FIXTURE), None))
+                .await;
+            let mut signals = proxy.receive_all_signals().await.unwrap();
+            type_text(&proxy, "ni").await;
+            take_job(&queue).publish(Some(1)).await.unwrap();
+            assert!(key(&proxy, KEYSYM_DOWN).await);
+            let shown = barrier(&mut signals, engine.signal_emitter()).await;
+            let before = engine.get().await.session.snapshot();
+            let generation = engine.get().await.generation.load(Ordering::Acquire);
+            let context = if changed { "新前文" } else { "" };
+            surrounding(
+                &proxy,
+                text_value(context),
+                context.chars().count() as u32,
+                context.chars().count() as u32,
+            )
+            .await
+            .unwrap();
+            let updates = barrier(&mut signals, engine.signal_emitter()).await;
+            let pending = if changed {
+                assert!(
+                    updates
+                        .iter()
+                        .any(|message| member(message) == "UpdateLookupTable")
+                );
+                assert_eq!(engine.get().await.cursor, 0);
+                assert!(!engine.get_mut().await.session.apply_candidates(
+                    before.revision,
+                    before.candidates,
+                    Some(1)
+                ));
+                Some(take_job(&queue))
+            } else {
+                assert!(updates.is_empty());
+                let engine = engine.get().await;
+                assert_eq!(engine.cursor, 1);
+                assert_eq!(engine.session.revision(), before.revision);
+                assert_eq!(engine.generation.load(Ordering::Acquire), generation);
+                assert_eq!(engine.session.candidates(), before.candidates);
+                assert!(queue.state.lock().unwrap().pending.is_empty());
+                None
+            };
+            let published = if changed { &updates } else { &shown };
+            let table = published
+                .iter()
+                .rev()
+                .find(|message| member(message) == "UpdateLookupTable")
+                .unwrap();
+            let (value, visible): (OwnedValue, bool) = table.body().deserialize().unwrap();
+            assert!(visible);
+            let table = Structure::try_from(value).unwrap();
+            let cursor = u32::try_from(&table.fields()[3]).unwrap() as usize;
+            let candidates = Array::try_from(&table.fields()[7]).unwrap();
+            let index = if selection == 0 { cursor } else { 1 };
+            let expected = text(&candidates.inner()[index]);
+            match selection {
+                0 => assert!(key(&proxy, KEYSYM_SPACE).await),
+                1 => assert!(key(&proxy, KEYSYM_DIGIT_1 + 1).await),
+                _ => proxy
+                    .call::<_, _, ()>("CandidateClicked", &(1_u32, MOUSE_BUTTON_LEFT, 0_u32))
+                    .await
+                    .unwrap(),
+            }
+            assert_eq!(committed(&mut signals).await, expected);
+            if let Some(pending) = pending {
+                pending.publish(Some(1)).await.unwrap();
+                assert!(
+                    barrier(&mut signals, engine.signal_emitter())
+                        .await
+                        .is_empty()
+                );
+            }
+        }
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn english_mode_passes_keys_through_and_cancels_late_ranking() {
         let bus = TestBus::new().await;
@@ -1542,7 +1856,7 @@ mod tests {
             assert!(engine.session.context().is_empty());
         }
         assert_eq!(learning.revision(), 0);
-        pending.publish(1).await.unwrap();
+        pending.publish(Some(1)).await.unwrap();
         let late = barrier(&mut signals, engine.signal_emitter()).await;
         assert!(late.is_empty(), "late ranking restored English composition");
     }
@@ -1657,7 +1971,7 @@ mod tests {
                     assert!(!wait_lookup(&mut signals).await);
                 }
             }
-            pending.publish(1).await.unwrap();
+            pending.publish(Some(1)).await.unwrap();
             let late = barrier(&mut signals, engine.signal_emitter()).await;
             assert!(late.is_empty(), "late ranking after {action}");
         }
@@ -1669,15 +1983,14 @@ mod tests {
         let weights =
             Path::new(env!("CARGO_MANIFEST_DIR")).join("data/models/sentence-model.safetensors");
         let (sender, failures) = mpsc::channel();
-        let worker =
-            RankingWorker::start(Model::load(&weights, "cpu", None).unwrap(), move |cause| {
-                sender.send(cause).unwrap()
-            })
-            .unwrap();
-        let mut session = Session::new(
-            decoder("...\n现\txian\t1000\n西安\txi an\t1\n西\txi\t100\n安\tan\t90\n"),
-            None,
-        );
+        let decoder = decoder("...\n现\txian\t1000\n西安\txi an\t1\n西\txi\t100\n安\tan\t90\n");
+        let worker = RankingWorker::start(
+            Model::load(&weights, "cpu", None).unwrap(),
+            decoder.clone(),
+            move |cause| sender.send(cause).unwrap(),
+        )
+        .unwrap();
+        let mut session = Session::new(decoder, None);
         session.set_context("我去");
         session.insert("xian").unwrap();
         worker.queue.submit(RankJob {
@@ -1703,23 +2016,36 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn model_promotion_reaches_the_panel_with_candidate_identity() {
+    async fn neural_recall_reaches_the_panel_with_candidate_identity() {
         let bus = TestBus::new().await;
         let weights =
             Path::new(env!("CARGO_MANIFEST_DIR")).join("data/models/sentence-model.safetensors");
         let learning = Arc::new(Learning::new(false));
-        let worker =
-            RankingWorker::start(Model::load(&weights, "cpu", None).unwrap(), report).unwrap();
-        let decoder = decoder("...\n现\txian\t1000\n西安\txi an\t1\n西\txi\t100\n安\tan\t90\n");
+        let decoder = decoder(
+            "...\n西\txi\t1\n安\tan\t90\n喜\txi\t1000\n戏\txi\t1000\n系\txi\t1000\n夕\txi\t1000\n细\txi\t1000\n息\txi\t1000\n习\txi\t1000\n稀\txi\t1000\n希\txi\t1000\n吸\txi\t1000\n席\txi\t1000\n袭\txi\t1000\n悉\txi\t1000\n昔\txi\t1000\n惜\txi\t1000\n熄\txi\t1000\n",
+        );
+        let worker = RankingWorker::start(
+            Model::load(&weights, "cpu", None).unwrap(),
+            decoder.clone(),
+            report,
+        )
+        .unwrap();
         let mut expected = Session::new(decoder.clone(), Some(learning.clone()));
         expected.set_context("我去");
         expected.insert("xian").unwrap();
-        let index = Model::load(&weights, "cpu", None)
+        assert!(
+            !expected
+                .candidates()
+                .iter()
+                .any(|candidate| candidate.text == "西安")
+        );
+        let mut snapshot = expected.snapshot();
+        let promotion = Model::load(&weights, "cpu", None)
             .unwrap()
-            .promotion(&expected.snapshot())
+            .refine(&mut snapshot, &decoder, || true)
             .unwrap()
-            .expect("fixture promotes a full conversion");
-        assert!(expected.apply_promotion(expected.revision(), index));
+            .unwrap();
+        assert!(expected.apply_candidates(snapshot.revision, snapshot.candidates, promotion.index));
         assert_eq!(expected.candidates()[0].text, "西安");
         let mut session = Session::new(decoder, Some(learning));
         session.set_context("我去");

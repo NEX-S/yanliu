@@ -91,6 +91,32 @@ class EvaluateCliTests(unittest.TestCase):
             self.assertIn('-:2:', result.stderr)
             self.assertFalse(output.exists())
 
+    def test_neural_recall_reports_the_actual_scoring_menu_before_promotion(self):
+        (self.root / 'dictionaries/8105.dict.yaml').write_text(
+            '...\n西\txi\t1\n安\tan\t90\n'
+            + ''.join(f'{char}\txi\t1000\n' for char in '喜戏系夕细息习稀希吸席袭悉昔惜熄'))
+        cases = [{'input': 'xian', 'context': '我去', 'gold': '西安'}]
+        static = self.run_cli(['evaluate', '--data', '-'], cases)
+        self.assertEqual(static.returncode, 0, static.stderr)
+        original = json.loads(static.stdout)['rows'][0]
+        self.assertIsNone(original['rank'])
+        self.assertIsNone(original['scoring'])
+        result = self.run_cli(['--model', str(MODEL), 'evaluate', '--data', '-'], cases)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        row = json.loads(result.stdout)['rows'][0]
+        self.assertEqual(row['rank'], 1)
+        self.assertIsNone(row['static_rank'])
+        scoring = row['scoring']
+        index = next(i for i, candidate in enumerate(scoring['candidates'])
+                     if candidate['text'] == '西安')
+        self.assertEqual(scoring['promotion']['index'], index)
+        self.assertIn(index, [score['index'] for score in scoring['promotion']['scores']])
+        self.assertEqual(scoring['candidates'][index], row['candidates'][0])
+        self.assertEqual(row['candidates'][0]['source'], 'Composed')
+        self.assertEqual(row['candidates'][0]['consumed'], 4)
+        for candidate in original['candidates']:
+            self.assertIn(candidate, row['candidates'])
+
 
 if __name__ == '__main__':
     unittest.main()

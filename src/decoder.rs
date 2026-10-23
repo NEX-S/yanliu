@@ -1,3 +1,5 @@
+mod neural;
+
 use crate::dictionary::{Dictionary, Entry, Rows};
 use std::{
     cmp::Reverse,

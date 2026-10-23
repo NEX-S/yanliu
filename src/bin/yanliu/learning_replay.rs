@@ -39,11 +39,15 @@ fn query(
     for character in case.input.chars() {
         session.insert(&character.to_string())?;
     }
-    let snapshot = session.snapshot();
-    let explanation = model.explain_promotion(&snapshot)?;
-    if let Some(index) = explanation.index {
-        session.apply_promotion(snapshot.revision, index);
-    }
+    let mut snapshot = session.snapshot();
+    let explanation = model
+        .refine(&mut snapshot, decoder, || true)?
+        .expect("synchronous CLI inference cannot be cancelled");
+    session.apply_candidates(
+        snapshot.revision,
+        snapshot.candidates.clone(),
+        explanation.index,
+    );
     let candidates: Vec<_> = session.candidates().iter().map(|candidate| json!({
         "text": candidate.text, "consumed": candidate.consumed,
         "source": format!("{:?}", candidate.source), "score_bits": candidate.score.to_bits(),

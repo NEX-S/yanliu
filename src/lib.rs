@@ -28,11 +28,13 @@ mod tests {
         Model::load(&path, "cpu", None)
             .expect("download the pinned model with scripts/fetch_assets.py")
     }
-    fn promote(model: &mut Model, session: &mut Session) {
-        let snapshot = session.snapshot();
-        if let Some(index) = model.promotion(&snapshot).unwrap() {
-            assert!(session.apply_promotion(snapshot.revision, index));
-        }
+    fn refine(model: &mut Model, decoder: &Decoder, session: &mut Session) {
+        let mut snapshot = session.snapshot();
+        let result = model
+            .refine(&mut snapshot, decoder, || true)
+            .unwrap()
+            .unwrap();
+        assert!(session.apply_candidates(snapshot.revision, snapshot.candidates, result.index));
     }
     #[test]
     fn composes_unlisted_sentence_and_completes_tail() {
@@ -264,7 +266,9 @@ mod tests {
         let old = s.snapshot();
         assert!(s.backspace());
         assert_eq!(s.input(), "niha");
-        assert!(!s.apply_promotion(old.revision, 0));
+        let current = s.candidates().to_vec();
+        assert!(!s.apply_candidates(old.revision, old.candidates, Some(usize::MAX)));
+        assert_eq!(s.candidates(), current);
         s.move_cursor(-2);
         assert!(s.delete_forward());
         assert_eq!(s.input(), "nia");
@@ -273,10 +277,11 @@ mod tests {
         assert!(s.input().is_empty());
         assert!(s.candidates().is_empty());
         assert!(s.context().is_empty());
-        assert!(!s.apply_promotion(old.revision, 0));
+        assert!(!s.apply_candidates(old.revision, old.candidates, Some(usize::MAX)));
+        assert!(s.candidates().is_empty());
     }
     #[test]
-    fn full_conversion_leaves_remainder_and_promotion_keeps_identity() {
+    fn partial_selection_keeps_remainder_and_refinement_preserves_ordinary_candidates() {
         let decoder = decoder();
         let mut session = Session::new(Arc::clone(&decoder), None);
         session.insert("nihaoshijie").unwrap();
@@ -312,12 +317,15 @@ mod tests {
         assert_eq!(session.select(index).as_deref(), Some("你"));
         assert_eq!(session.input(), "hao");
 
-        let mut session = Session::new(decoder, None);
+        let mut session = Session::new(decoder.clone(), None);
         session.set_context("我去");
         session.insert("xian").unwrap();
         let candidates = session.candidates();
-        let mut before: Vec<_> = candidates
+        let before: Vec<_> = candidates
             .iter()
+            .filter(|candidate| {
+                candidate.source != CandidateSource::Completion && !candidate.source.is_correction()
+            })
             .map(|candidate| {
                 (
                     candidate.text.clone(),
@@ -327,9 +335,9 @@ mod tests {
                 )
             })
             .collect();
-        promote(&mut model(), &mut session);
+        refine(&mut model(), &decoder, &mut session);
         let candidates = session.candidates();
-        let mut after: Vec<_> = candidates
+        let after: Vec<_> = candidates
             .iter()
             .map(|candidate| {
                 (
@@ -340,9 +348,9 @@ mod tests {
                 )
             })
             .collect();
-        before.sort();
-        after.sort();
-        assert_eq!(before, after);
+        for existing in before {
+            assert!(after.contains(&existing), "refinement changed {existing:?}");
+        }
     }
 
     #[test]
@@ -474,7 +482,7 @@ mod tests {
     }
 
     #[test]
-    fn real_session_and_model_lock_candidate_bits() {
+    fn incremental_and_whole_input_sessions_produce_identical_refined_menus() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
         let decoder = Arc::new(Decoder::new(
             Dictionary::load_dir(root.join("data/dictionaries")).unwrap(),
@@ -513,14 +521,8 @@ mod tests {
         assert_eq!(bits(&session), bits(&typed));
         session.set_context("昨天");
         typed.set_context("昨天");
-        let snapshot = session.snapshot();
-        let typed_snapshot = typed.snapshot();
-        let promotion = model.promotion(&snapshot).unwrap();
-        assert_eq!(promotion, other.promotion(&typed_snapshot).unwrap());
-        if let Some(index) = promotion {
-            assert!(session.apply_promotion(snapshot.revision, index));
-            assert!(typed.apply_promotion(typed_snapshot.revision, index));
-        }
+        refine(&mut model, &decoder, &mut session);
+        refine(&mut other, &decoder, &mut typed);
         assert_eq!(bits(&session), bits(&typed));
         let stale = session.snapshot();
         let partial = session
@@ -534,7 +536,8 @@ mod tests {
         assert_eq!(session.input(), &stale.input[consumed..]);
         assert!(!session.input().is_empty());
         assert_eq!(bits(&session), bits(&typed));
-        assert!(!session.apply_promotion(stale.revision, 0));
+        assert!(!session.apply_candidates(stale.revision, stale.candidates, Some(usize::MAX)));
+        assert_eq!(bits(&session), bits(&typed));
     }
 
     #[test]
@@ -544,36 +547,28 @@ mod tests {
         assert_eq!(d.len(), 1);
     }
     #[test]
-    fn cpu_promotion_snapshot_apply_preserves_revision_prefix_and_learning() {
-        let mut session = learning_session(decoder());
+    fn cpu_refinement_preserves_revision_prefix_and_learning() {
+        let decoder = decoder();
+        let mut session = learning_session(decoder.clone());
         session.set_context("我去");
         session.insert("xian").unwrap();
         let mut model = model();
-        let snap = session.snapshot();
-        let before = snap.candidates.clone();
-        let revision = snap.revision;
-        if let Some(index) = model.promotion(&snap).unwrap() {
-            assert!(session.apply_promotion(revision, index));
-        }
+        let before: Vec<_> = session
+            .candidates()
+            .iter()
+            .filter(|candidate| {
+                candidate.source != CandidateSource::Completion && !candidate.source.is_correction()
+            })
+            .cloned()
+            .collect();
+        let revision = session.revision();
+        refine(&mut model, &decoder, &mut session);
         assert_eq!(session.revision(), revision);
         assert_eq!(session.input(), "xian");
         assert_eq!(session.context(), "我去");
-        let tuples = |cs: &[Candidate]| {
-            let mut v: Vec<_> = cs
-                .iter()
-                .map(|c| {
-                    (
-                        c.text.clone(),
-                        c.consumed,
-                        c.source.clone(),
-                        c.score.to_bits(),
-                    )
-                })
-                .collect();
-            v.sort();
-            v
-        };
-        assert_eq!(tuples(&before), tuples(session.candidates()));
+        for existing in before {
+            assert!(session.candidates().contains(&existing));
+        }
         let prefix = session
             .candidates()
             .iter()
@@ -585,9 +580,12 @@ mod tests {
         session.reset();
         session.insert("xi").unwrap();
         assert_eq!(session.candidates()[0].source, CandidateSource::User);
+        refine(&mut model, &decoder, &mut session);
+        assert_eq!(session.candidates()[0].source, CandidateSource::User);
         let snap = session.snapshot();
-        assert_eq!(model.promotion(&snap).unwrap(), None);
         session.insert("a").unwrap();
-        assert!(!session.apply_promotion(snap.revision, 0));
+        let current = session.candidates().to_vec();
+        assert!(!session.apply_candidates(snap.revision, snap.candidates, Some(usize::MAX)));
+        assert_eq!(session.candidates(), current);
     }
 }

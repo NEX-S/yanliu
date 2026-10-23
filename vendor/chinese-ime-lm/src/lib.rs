@@ -8,8 +8,7 @@ use std::sync::Arc;
 
 use weights::{Tensor, Weights};
 
-/// Stable terminal normalization; retain f32 exp, accumulate and subtract in f64.
-fn log_softmax_in_place(logits: &mut [f32]) {
+fn log_softmax_terms(logits: &[f32]) -> (f32, f64) {
     let mut highest = f32::NEG_INFINITY;
     for logit in logits.iter() {
         highest = highest.max(*logit);
@@ -18,7 +17,12 @@ fn log_softmax_in_place(logits: &mut [f32]) {
         .iter()
         .map(|logit| f64::from((logit - highest).exp()))
         .sum();
-    let lnsum = sum.ln();
+    (highest, sum.ln())
+}
+
+/// Stable terminal normalization; retain f32 exp, accumulate and subtract in f64.
+fn log_softmax_in_place(logits: &mut [f32]) {
+    let (highest, lnsum) = log_softmax_terms(logits);
     for logit in logits.iter_mut() {
         *logit = ((f64::from(*logit) - f64::from(highest)) - lnsum) as f32;
     }
@@ -51,6 +55,35 @@ impl Matrix {
             }
             Tensor::Quantized { values, scales } => {
                 quantized_gemv(x, values, scales, width, out);
+            }
+        }
+    }
+
+    fn write_gemm(&self, x: &[f32], width: usize, outputs: usize, out: &mut [f32]) {
+        if let Tensor::Quantized { values, scales } = &self.inner {
+            let pairs = x.len() / width / 2;
+            for pair in 0..pairs {
+                let source = &x[pair * 2 * width..(pair + 1) * 2 * width];
+                let target = &mut out[pair * 2 * outputs..(pair + 1) * 2 * outputs];
+                let (first, second) = target.split_at_mut(outputs);
+                quantized_gemv_pair(
+                    [&source[..width], &source[width..]],
+                    values,
+                    scales,
+                    width,
+                    [first, second],
+                );
+            }
+            if x.len() / width % 2 != 0 {
+                self.write_gemv(
+                    &x[pairs * 2 * width..],
+                    width,
+                    &mut out[pairs * 2 * outputs..],
+                );
+            }
+        } else {
+            for (source, target) in x.chunks_exact(width).zip(out.chunks_exact_mut(outputs)) {
+                self.write_gemv(source, width, target);
             }
         }
     }
@@ -150,12 +183,15 @@ impl std::fmt::Debug for Reranker {
 
 /// The per-layer keys and values for a prefix, so that scoring several candidates against the same
 /// committed text runs the prefix once instead of once per candidate.
-struct Prefix {
+pub struct Prefix {
     length: usize,
     keys: Vec<Vec<f32>>,
     values: Vec<Vec<f32>>,
     /// Log probabilities from this prefix state, reused for every candidate opening.
     last_distribution: Vec<f32>,
+    /// Only the uncommitted path, so a search state can become a ranking resume point.
+    hidden: Vec<f32>,
+    cumulative: Vec<f32>,
 }
 
 /// Everything one candidate's run passed through, so that a later run agreeing with part of it can
@@ -170,6 +206,8 @@ struct TailRun {
     hidden: Vec<f32>,
     /// Log-probability of the run's first `i + 1` tokens, summed left to right.
     cumulative: Vec<f32>,
+    /// Search already projects its final state; retain that result for a complete resume.
+    last_distribution: Option<Vec<f32>>,
 }
 
 impl TailRun {
@@ -179,6 +217,10 @@ impl TailRun {
     /// leading part of the one already held.
     fn resume(&self, taken: usize, n_embd: usize, model: &SentenceModel) -> (Prefix, f32) {
         let width = (self.base + taken) * n_embd;
+        let last_distribution = match &self.last_distribution {
+            Some(distribution) if taken == self.cumulative.len() => distribution.clone(),
+            _ => model.distribution(&self.hidden[(taken - 1) * n_embd..taken * n_embd]),
+        };
         (
             Prefix {
                 length: self.base + taken,
@@ -188,8 +230,9 @@ impl TailRun {
                     .iter()
                     .map(|value| value[..width].to_vec())
                     .collect(),
-                last_distribution: model
-                    .distribution(&self.hidden[(taken - 1) * n_embd..taken * n_embd]),
+                last_distribution,
+                hidden: self.hidden[..taken * n_embd].to_vec(),
+                cumulative: self.cumulative[..taken].to_vec(),
             },
             self.cumulative[taken - 1],
         )
@@ -212,6 +255,7 @@ impl TailRun {
                 .copied()
                 .chain(rest.cumulative.iter().map(|value| carried + value))
                 .collect(),
+            last_distribution: rest.last_distribution,
         }
     }
 }
@@ -375,6 +419,89 @@ impl SentenceModel {
         self.index.contains_key(&character)
     }
 
+    /// Probability of a known character after this prefix; unknowns do not become UNK paths.
+    pub fn next_log_probability(&self, prefix: &Prefix, character: char) -> Option<f32> {
+        self.index
+            .get(&character)
+            .map(|&token| prefix.last_distribution[token as usize])
+    }
+
+    /// Advance independent branches together so their projections share weight reads.
+    pub fn advance(&self, branches: &[(&Prefix, char)]) -> Option<Vec<Prefix>> {
+        let n_embd = self.config.n_embd;
+        let mut x = Vec::with_capacity(branches.len() * n_embd);
+        let mut advanced = Vec::with_capacity(branches.len());
+        for &(prefix, character) in branches {
+            let &token = self.index.get(&character)?;
+            assert!(prefix.length < self.config.context);
+            x.extend(self.embed(&[token], prefix.length));
+            advanced.push(Prefix {
+                length: prefix.length + 1,
+                keys: Vec::with_capacity(self.blocks.len()),
+                values: Vec::with_capacity(self.blocks.len()),
+                last_distribution: Vec::new(),
+                hidden: prefix.hidden.clone(),
+                cumulative: {
+                    let mut cumulative = prefix.cumulative.clone();
+                    cumulative.push(
+                        cumulative.last().copied().unwrap_or(0.0)
+                            + prefix.last_distribution[token as usize],
+                    );
+                    cumulative
+                },
+            });
+        }
+        for (layer, block) in self.blocks.iter().enumerate() {
+            let normed = layer_norm(&x, &block.ln1_weight, &block.ln1_bias, n_embd);
+            let qkv = linear(
+                &normed,
+                &block.qkv_weight,
+                &block.qkv_bias,
+                n_embd,
+                3 * n_embd,
+            );
+            let mut attended = Vec::with_capacity(x.len());
+            // Rows are different sequences: causal attention must never see another branch's KV.
+            for (row, &(prefix, _)) in branches.iter().enumerate() {
+                let qkv = &qkv[row * 3 * n_embd..(row + 1) * 3 * n_embd];
+                let mut keys = Vec::with_capacity(prefix.keys[layer].len() + n_embd);
+                let mut values = Vec::with_capacity(prefix.values[layer].len() + n_embd);
+                keys.extend_from_slice(&prefix.keys[layer]);
+                values.extend_from_slice(&prefix.values[layer]);
+                keys.extend_from_slice(&qkv[n_embd..2 * n_embd]);
+                values.extend_from_slice(&qkv[2 * n_embd..]);
+                attended.extend(self.attention(&qkv[..n_embd], &keys, &values, 1, prefix.length));
+                advanced[row].keys.push(keys);
+                advanced[row].values.push(values);
+            }
+            let projected = linear(
+                &attended,
+                &block.proj_weight,
+                &block.proj_bias,
+                n_embd,
+                n_embd,
+            );
+            for (slot, value) in x.iter_mut().zip(projected) {
+                *slot += value;
+            }
+            self.feed_forward(&mut x, block);
+        }
+        let normed = layer_norm(&x, &self.final_weight, &self.final_bias, n_embd);
+        let mut logits = vec![0.0; branches.len() * self.config.vocab];
+        self.token
+            .write_gemm(&normed, n_embd, self.config.vocab, &mut logits);
+        for ((prefix, distribution), hidden) in advanced
+            .iter_mut()
+            .zip(logits.chunks_exact_mut(self.config.vocab))
+            .zip(normed.chunks_exact(n_embd))
+        {
+            log_softmax_in_place(distribution);
+            prefix.last_distribution = distribution.to_vec();
+            prefix.hidden.extend_from_slice(hidden);
+        }
+        Some(advanced)
+    }
+
     fn encode(&self, text: &str) -> Vec<u32> {
         text.chars()
             .map(|ch| self.index.get(&ch).copied().unwrap_or(UNK))
@@ -482,6 +609,8 @@ impl SentenceModel {
             keys,
             values,
             last_distribution,
+            hidden: Vec::new(),
+            cumulative: Vec::new(),
         }
     }
 
@@ -554,6 +683,7 @@ impl SentenceModel {
             values: values_out,
             hidden: normed,
             cumulative,
+            last_distribution: None,
         }
     }
 
@@ -587,7 +717,11 @@ impl SentenceModel {
     /// the most expensive step per scored character.
     fn log_probability(&self, hidden: &[f32], token: u32) -> f32 {
         let token = (token as usize).min(self.config.vocab - 1);
-        self.distribution(hidden)[token]
+        let n_embd = self.config.n_embd;
+        let mut logits = vec![0.0; self.config.vocab];
+        self.token.write_gemv(hidden, n_embd, &mut logits);
+        let (highest, lnsum) = log_softmax_terms(&logits);
+        ((f64::from(logits[token]) - f64::from(highest)) - lnsum) as f32
     }
 
     /// log P over the whole vocabulary for the state at `hidden`.
@@ -648,16 +782,11 @@ pub struct Reranker {
     /// Only the cached prefix belongs to one session.
     model: Arc<SentenceModel>,
     cached: Option<(Vec<u32>, Prefix)>,
-    /// What the previous decision ended up knowing, one entry per candidate it scored: the tokens
-    /// it ran, the state it left the model in, and the log-probability accumulated over them.
-    ///
-    /// A keystroke rescores candidates that are mostly the previous keystroke's candidates with a
-    /// character added, so most of each candidate has already been run. Measured on the sentence
-    /// eval driven through the real runtime, 61% of the characters scored are a prefix of
-    /// something the previous keystroke scored. Keeping only the previous decision bounds this to
-    /// one entry per candidate; keeping more would grow without a ceiling for reuse that was not
-    /// measured to be there.
-    resume: Vec<(Vec<u32>, TailRun)>,
+    /// Previous ranking runs followed by the current search's finished parents. Scoring replaces
+    /// both with its actual candidates; keeping older frames would grow without a ceiling.
+    resume: Vec<(Vec<u32>, Arc<TailRun>)>,
+    /// Search seeds live only until ranking or the next search, including neutral-score frames.
+    ranked_len: usize,
 }
 
 impl Reranker {
@@ -666,11 +795,79 @@ impl Reranker {
             model,
             cached: None,
             resume: Vec::new(),
+            ranked_len: 0,
         }
     }
 
     pub fn model(&self) -> &SentenceModel {
         &self.model
+    }
+
+    /// Reuse the committed prefix while reserving room for a complete constrained path.
+    pub fn prefix(
+        &mut self,
+        context: &str,
+        reserve: usize,
+    ) -> Result<(&Self, &Prefix), ModelError> {
+        self.resume.truncate(self.ranked_len);
+        if reserve >= self.model.config.context {
+            return Err(ModelError::Geometry(format!(
+                "{reserve} output characters leave no BOS position in a {}-position model",
+                self.model.config.context
+            )));
+        }
+        self.cache_prefix(context, reserve);
+        Ok((
+            self,
+            &self.cached.as_ref().expect("prefix was just computed").1,
+        ))
+    }
+
+    /// Reuse a known nonempty path from the previous ranking under the prepared root.
+    pub fn reuse_prefix(&self, text: &str) -> Option<Prefix> {
+        let tokens = self.model.encode(text);
+        let (_, run) = self
+            .resume
+            .iter()
+            .rev()
+            .find(|(previous, _)| previous.starts_with(&tokens))?;
+        Some(
+            run.resume(tokens.len(), self.model.config.n_embd, &self.model)
+                .0,
+        )
+    }
+
+    /// Retain the parents of the final search beam without running its last characters twice.
+    pub fn retain_search_prefixes(&mut self, prefixes: Vec<(String, Prefix)>) {
+        self.resume
+            .extend(prefixes.into_iter().map(|(text, prefix)| {
+                let run = TailRun {
+                    base: prefix.length - prefix.cumulative.len(),
+                    keys: prefix.keys,
+                    values: prefix.values,
+                    hidden: prefix.hidden,
+                    cumulative: prefix.cumulative,
+                    last_distribution: Some(prefix.last_distribution),
+                };
+                (self.model.encode(&text), Arc::new(run))
+            }));
+    }
+
+    fn cache_prefix(&mut self, context: &str, longest: usize) {
+        // Keyed on the tokens rather than the context string, because two different contexts that
+        // truncate to the same window are the same prefix and must not invalidate each other.
+        let tokens = self.model.prefix_tokens(context, longest);
+        let matched = self
+            .cached
+            .as_ref()
+            .is_some_and(|(cached, _)| *cached == tokens);
+        if !matched {
+            let prefix = self.model.run_prefix(&tokens);
+            self.cached = Some((tokens, prefix));
+            // Every resume point hangs off the old prefix and means nothing against a new one.
+            self.resume.clear();
+            self.ranked_len = 0;
+        }
     }
 
     /// Mean log-probability per character for each candidate, in the order given.
@@ -684,19 +881,7 @@ impl Reranker {
             .map(|text| text.chars().count())
             .max()
             .unwrap_or(0);
-        // Keyed on the tokens rather than the context string, because two different contexts that
-        // truncate to the same window are the same prefix and must not invalidate each other.
-        let tokens = self.model.prefix_tokens(context, longest);
-        let matched = self
-            .cached
-            .as_ref()
-            .is_some_and(|(cached, _)| *cached == tokens);
-        if !matched {
-            let prefix = self.model.run_prefix(&tokens);
-            self.cached = Some((tokens, prefix));
-            // Every resume point hangs off the old prefix and means nothing against a new one.
-            self.resume.clear();
-        }
+        self.cache_prefix(context, longest);
         let (_, prefix) = self.cached.as_ref().expect("prefix was just computed");
         let n_embd = self.model.config.n_embd;
 
@@ -707,7 +892,7 @@ impl Reranker {
         }
         // Candidates may resume the same run at the same position. Project its hidden state once.
         let mut resumed: Vec<(SourceKind, usize, usize, Prefix, f32)> = Vec::new();
-        let mut next: Vec<(Vec<u32>, TailRun)> = Vec::with_capacity(candidates.len());
+        let mut next: Vec<(Vec<u32>, Arc<TailRun>)> = Vec::with_capacity(candidates.len());
         let mut scores = Vec::with_capacity(candidates.len());
         for text in candidates {
             let tail = self.model.encode(text);
@@ -722,10 +907,30 @@ impl Reranker {
                 .saturating_sub(prefix.length)
                 .max(1);
             let tail = &tail[..tail.len().min(limit)];
+            // The prefix already predicts every first character; a single character has no
+            // continuation to run or state worth retaining for the next decision.
+            if tail.len() == 1 {
+                let token = (tail[0] as usize).min(self.model.config.vocab - 1);
+                scores.push(prefix.last_distribution[token]);
+                continue;
+            }
 
-            // How far this candidate agrees with the furthest-agreeing run from last time. One
-            // short of `tail.len()` at most: a resume has to leave a token to run, both because
-            // the run needs one and because a candidate with nothing left to score has no term.
+            // A complete match needs neither a new last-token run nor a new output projection.
+            if let Some((_, run)) = self
+                .resume
+                .iter()
+                .rev()
+                .chain(next.iter().rev())
+                .find(|(tokens, _)| tokens.as_slice() == tail)
+            {
+                let run = Arc::clone(run);
+                scores.push(run.cumulative[tail.len() - 1] / tail.len() as f32);
+                next.push((tail.to_vec(), run));
+                continue;
+            }
+
+            // Complete matches were handled above; a partial match leaves at least one token
+            // for run_tail, using the furthest-agreeing previous or current candidate.
             let previous = self
                 .resume
                 .iter()
@@ -784,9 +989,10 @@ impl Reranker {
             };
             let total = run.cumulative[run.cumulative.len() - 1];
             scores.push(total / tail.len() as f32);
-            next.push((tail.to_vec(), run));
+            next.push((tail.to_vec(), Arc::new(run)));
         }
         self.resume = next;
+        self.ranked_len = self.resume.len();
         scores
     }
 }
@@ -821,10 +1027,8 @@ fn dot(a: &[f32], b: &[f32]) -> f32 {
 fn linear(x: &[f32], w: &Matrix, bias: &[f32], inputs: usize, outputs: usize) -> Vec<f32> {
     let rows = x.len() / inputs;
     let mut out = vec![0.0; rows * outputs];
-    for row in 0..rows {
-        let source = &x[row * inputs..(row + 1) * inputs];
-        let target = &mut out[row * outputs..(row + 1) * outputs];
-        w.write_gemv(source, inputs, target);
+    w.write_gemm(x, inputs, outputs, &mut out);
+    for target in out.chunks_exact_mut(outputs) {
         for (slot, &term) in target.iter_mut().zip(bias) {
             *slot += term;
         }
@@ -912,6 +1116,93 @@ fn quantized_gemv(x: &[f32], values: &[i8], scales: &[f32], width: usize, out: &
     while row < rows {
         let start = row * width;
         out[row] = dot_i8(x, &values[start..start + width]) * scales[row];
+        row += 1;
+    }
+}
+
+// Two input rows share each weight conversion without changing either dot product's reduction.
+fn dot2x4(x: [&[f32]; 2], rows: [&[i8]; 4]) -> [[f32; 4]; 2] {
+    const LANES: usize = 8;
+    let mut p00 = [0.0f32; LANES];
+    let mut p01 = [0.0f32; LANES];
+    let mut p02 = [0.0f32; LANES];
+    let mut p03 = [0.0f32; LANES];
+    let mut p10 = [0.0f32; LANES];
+    let mut p11 = [0.0f32; LANES];
+    let mut p12 = [0.0f32; LANES];
+    let mut p13 = [0.0f32; LANES];
+    let n = x[0].len() / LANES;
+    for chunk in 0..n {
+        let at = chunk * LANES;
+        let x0 = &x[0][at..at + LANES];
+        let x1 = &x[1][at..at + LANES];
+        let y0 = &rows[0][at..at + LANES];
+        let y1 = &rows[1][at..at + LANES];
+        let y2 = &rows[2][at..at + LANES];
+        let y3 = &rows[3][at..at + LANES];
+        for lane in 0..LANES {
+            let y0 = f32::from(y0[lane]);
+            let y1 = f32::from(y1[lane]);
+            let y2 = f32::from(y2[lane]);
+            let y3 = f32::from(y3[lane]);
+            p00[lane] += x0[lane] * y0;
+            p01[lane] += x0[lane] * y1;
+            p02[lane] += x0[lane] * y2;
+            p03[lane] += x0[lane] * y3;
+            p10[lane] += x1[lane] * y0;
+            p11[lane] += x1[lane] * y1;
+            p12[lane] += x1[lane] * y2;
+            p13[lane] += x1[lane] * y3;
+        }
+    }
+    let mut totals = [
+        [
+            sum_lanes(p00),
+            sum_lanes(p01),
+            sum_lanes(p02),
+            sum_lanes(p03),
+        ],
+        [
+            sum_lanes(p10),
+            sum_lanes(p11),
+            sum_lanes(p12),
+            sum_lanes(p13),
+        ],
+    ];
+    for index in n * LANES..x[0].len() {
+        for (row, weight) in rows.iter().enumerate() {
+            let weight = f32::from(weight[index]);
+            totals[0][row] += x[0][index] * weight;
+            totals[1][row] += x[1][index] * weight;
+        }
+    }
+    totals
+}
+
+fn quantized_gemv_pair(
+    x: [&[f32]; 2],
+    values: &[i8],
+    scales: &[f32],
+    width: usize,
+    out: [&mut [f32]; 2],
+) {
+    let [first, second] = out;
+    let rows = first.len();
+    let mut row = 0;
+    while row + 4 <= rows {
+        let at = |offset: usize| &values[(row + offset) * width..(row + offset + 1) * width];
+        let dots = dot2x4(x, [at(0), at(1), at(2), at(3)]);
+        for offset in 0..4 {
+            first[row + offset] = dots[0][offset] * scales[row + offset];
+            second[row + offset] = dots[1][offset] * scales[row + offset];
+        }
+        row += 4;
+    }
+    while row < rows {
+        let start = row * width;
+        let weights = &values[start..start + width];
+        first[row] = dot_i8(x[0], weights) * scales[row];
+        second[row] = dot_i8(x[1], weights) * scales[row];
         row += 1;
     }
 }
@@ -1061,6 +1352,170 @@ mod tests {
     }
 
     #[test]
+    fn constrained_steps_match_full_tail_and_reject_unknown_characters() {
+        let mut scorer = reranker();
+        let (prepared, root) = scorer.prefix("昨天", 3).unwrap();
+        let model = prepared.model();
+        assert!(model.next_log_probability(root, '\u{10ffff}').is_none());
+        assert!(model.advance(&[(root, '\u{10ffff}')]).is_none());
+        let first = model.advance(&[(root, '我')]).unwrap().remove(0);
+        let second = model.advance(&[(&first, '今')]).unwrap().remove(0);
+        let actual = model.next_log_probability(root, '我').unwrap()
+            + model.next_log_probability(&first, '今').unwrap()
+            + model.next_log_probability(&second, '天').unwrap();
+        let expected = model.score_tail(root, &model.encode("我今天"));
+        assert!((actual - expected).abs() <= 1e-5);
+        assert!(scorer.prefix("", scorer.model().context_length()).is_err());
+    }
+
+    #[test]
+    fn search_parents_feed_ranking_and_expire_after_a_skipped_decision() {
+        fn parent(scorer: &mut super::Reranker, context: &str, reserve: usize) -> super::Prefix {
+            let (prepared, root) = scorer.prefix(context, reserve).unwrap();
+            let first = prepared.model().advance(&[(root, '我')]).unwrap().remove(0);
+            prepared
+                .model()
+                .advance(&[(&first, '们')])
+                .unwrap()
+                .remove(0)
+        }
+        let mut scorer = reranker();
+        let candidates = ["我们去", "我们来", "我来"];
+        let expected = reranker().log_probabilities("昨天", &candidates);
+        scorer.log_probabilities("昨天", &["今天去", "明天来"]);
+        let ranked = scorer.resume.len();
+        let seed = parent(&mut scorer, "昨天", 3);
+        scorer.retain_search_prefixes(vec![("我们".into(), seed)]);
+        assert_eq!(scorer.resume.len(), ranked + 1);
+        // A protected/neutral frame never scores. Starting another search must drop its seeds.
+        let seed = parent(&mut scorer, "昨天", 3);
+        assert_eq!(scorer.resume.len(), ranked);
+        scorer.retain_search_prefixes(vec![("我们".into(), seed)]);
+        let actual = scorer.log_probabilities("昨天", &candidates);
+        for (actual, expected) in actual.iter().zip(expected) {
+            assert!((actual - expected).abs() <= 1e-5);
+        }
+        assert_eq!(scorer.resume.len(), candidates.len());
+        assert_eq!(scorer.ranked_len, candidates.len());
+
+        let seed = {
+            let (prepared, _) = scorer.prefix("昨天", 4).unwrap();
+            let reused = prepared.reuse_prefix("我们").unwrap();
+            prepared
+                .model()
+                .advance(&[(&reused, '一')])
+                .unwrap()
+                .remove(0)
+        };
+        scorer.retain_search_prefixes(vec![("我们一".into(), seed)]);
+        let candidates = ["我们一起", "我们一同"];
+        let actual = scorer.log_probabilities("昨天", &candidates);
+        let expected = reranker().log_probabilities("昨天", &candidates);
+        for (actual, expected) in actual.iter().zip(expected) {
+            assert!((actual - expected).abs() <= 1e-5);
+        }
+
+        // Reserving a different output length near the window edge changes the effective root.
+        let context = "昨天".repeat(40);
+        let seed = parent(&mut scorer, &context, 5);
+        scorer.retain_search_prefixes(vec![("我们".into(), seed)]);
+        let actual = scorer.log_probabilities(&context, &candidates);
+        let expected = reranker().log_probabilities(&context, &candidates);
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn search_reuses_only_the_matching_root_and_character_prefix() {
+        let mut scorer = reranker();
+        scorer.log_probabilities("昨天", &["我今天去上班", "我今天去工作"]);
+        let (prepared, root) = scorer.prefix("昨天", 8).unwrap();
+        let model = prepared.model();
+        assert!(prepared.reuse_prefix("我们").is_none());
+        let bits = |rows: &[Vec<f32>]| {
+            rows.iter()
+                .map(|row| row.iter().map(|x| x.to_bits()).collect::<Vec<_>>())
+                .collect::<Vec<_>>()
+        };
+        for text in ["我", "我今", "我今天", "我今天去上班"] {
+            let reused = prepared.reuse_prefix(text).unwrap();
+            let mut fresh = None;
+            for character in text.chars() {
+                let parent = fresh.as_ref().unwrap_or(root);
+                fresh = Some(model.advance(&[(parent, character)]).unwrap().remove(0));
+            }
+            let fresh = fresh.unwrap();
+            assert_eq!(reused.length, fresh.length);
+            assert_eq!(bits(&reused.keys), bits(&fresh.keys));
+            assert_eq!(bits(&reused.values), bits(&fresh.values));
+            assert_eq!(
+                reused
+                    .last_distribution
+                    .iter()
+                    .map(|x| x.to_bits())
+                    .collect::<Vec<_>>(),
+                fresh
+                    .last_distribution
+                    .iter()
+                    .map(|x| x.to_bits())
+                    .collect::<Vec<_>>()
+            );
+        }
+        let (prepared, _) = scorer.prefix("前天", 8).unwrap();
+        assert!(prepared.reuse_prefix("我").is_none());
+
+        let context = "昨天".repeat(40);
+        scorer.log_probabilities(&context, &["我今天去上班"]);
+        let (prepared, _) = scorer.prefix(&context, 3).unwrap();
+        assert!(
+            prepared.reuse_prefix("我").is_none(),
+            "different window must drop old runs"
+        );
+    }
+
+    #[test]
+    fn independent_branches_keep_single_step_bits() {
+        let mut scorer = reranker();
+        let (prepared, root) = scorer.prefix("昨天", 6).unwrap();
+        let model = prepared.model();
+        let parents = model
+            .advance(&[(root, '我'), (root, '今'), (root, '天')])
+            .unwrap();
+        // Different lengths and repeated parents expose accidental cross-branch attention.
+        let branches = [
+            (root, '他'),
+            (&parents[0], '们'),
+            (&parents[1], '天'),
+            (&parents[0], '今'),
+            (&parents[2], '气'),
+        ];
+        let actual = model.advance(&branches).unwrap();
+        for ((prefix, character), actual) in branches.iter().zip(actual) {
+            let run = model.run_tail(prefix, &[model.index[character]]);
+            let expected = model.distribution(&run.hidden);
+            assert_eq!(actual.length, prefix.length + 1);
+            for (actual, expected) in actual.keys.iter().flatten().zip(run.keys.iter().flatten()) {
+                assert_eq!(actual.to_bits(), expected.to_bits());
+            }
+            for (actual, expected) in actual
+                .values
+                .iter()
+                .flatten()
+                .zip(run.values.iter().flatten())
+            {
+                assert_eq!(actual.to_bits(), expected.to_bits());
+            }
+            assert_eq!(
+                actual
+                    .last_distribution
+                    .iter()
+                    .map(|x| x.to_bits())
+                    .collect::<Vec<_>>(),
+                expected.iter().map(|x| x.to_bits()).collect::<Vec<_>>()
+            );
+        }
+    }
+
+    #[test]
     fn batched_quantized_dots_match_single_rows() {
         let width = 192;
         let rows = 17;
@@ -1101,6 +1556,110 @@ mod tests {
     }
 
     #[test]
+    fn matrix_batches_preserve_single_row_bits_and_bias() {
+        for (width, outputs) in [
+            (192_usize, 17_usize),
+            (768, 9),
+            (195, 7),
+            (771, 5),
+            (192, 9358),
+        ] {
+            let values: Vec<i8> = (0..width * outputs)
+                .map(|index| (index * 17).wrapping_sub(40) as i8)
+                .collect();
+            let scales: Vec<f32> = (0..outputs)
+                .map(|index| 0.0007 * (index as f32 + 1.0))
+                .collect();
+            let bias: Vec<f32> = (0..outputs)
+                .map(|index| ((index * 53 % 101) as f32 - 50.0) / 29.0)
+                .collect();
+            for quantized in [true, false] {
+                let inner = if quantized {
+                    super::Tensor::Quantized {
+                        values: values.clone(),
+                        scales: scales.clone(),
+                    }
+                } else {
+                    super::Tensor::Float(
+                        values
+                            .iter()
+                            .map(|&value| f32::from(value) / 37.0)
+                            .collect(),
+                    )
+                };
+                let matrix = super::Matrix { inner };
+                for batch in [0, 1, 2, 3, 7, 12] {
+                    let x: Vec<f32> = (0..batch * width)
+                        .map(|index| ((index * 37 % 251) as f32 - 125.0) / 13.0)
+                        .collect();
+                    let mut expected = vec![0.0; batch * outputs];
+                    for (source, target) in x
+                        .chunks_exact(width)
+                        .zip(expected.chunks_exact_mut(outputs))
+                    {
+                        matrix.write_gemv(source, width, target);
+                    }
+                    let mut actual = vec![0.0; expected.len()];
+                    matrix.write_gemm(&x, width, outputs, &mut actual);
+                    assert_eq!(
+                        actual
+                            .iter()
+                            .map(|value| value.to_bits())
+                            .collect::<Vec<_>>(),
+                        expected
+                            .iter()
+                            .map(|value| value.to_bits())
+                            .collect::<Vec<_>>(),
+                        "width={width}, outputs={outputs}, batch={batch}, quantized={quantized}"
+                    );
+                    for target in expected.chunks_exact_mut(outputs) {
+                        for (slot, term) in target.iter_mut().zip(&bias) {
+                            *slot += term;
+                        }
+                    }
+                    let actual = super::linear(&x, &matrix, &bias, width, outputs);
+                    assert_eq!(
+                        actual.iter().map(|value| value.to_bits()).collect::<Vec<_>>(),
+                        expected.iter().map(|value| value.to_bits()).collect::<Vec<_>>(),
+                        "biased width={width}, outputs={outputs}, batch={batch}, quantized={quantized}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn tail_cumulative_matches_serial_distributions_bit_for_bit() {
+        let scorer = reranker();
+        let model = scorer.model();
+        let tokens = model.encode("我今天去上班回来");
+        for context in ["", "昨天", "医生调整了药物的"] {
+            let prefix = model.run_prefix(&model.prefix_tokens(context, tokens.len()));
+            for length in 1..=tokens.len() {
+                let tail = &tokens[..length];
+                let run = model.run_tail(&prefix, tail);
+                assert_eq!(run.hidden.len(), length * model.config.n_embd);
+                assert_eq!(run.cumulative.len(), length);
+                let mut expected = prefix.last_distribution[tail[0] as usize];
+                assert_eq!(run.cumulative[0].to_bits(), expected.to_bits());
+                for (step, (&token, row)) in tail[1..]
+                    .iter()
+                    .zip(run.hidden.chunks_exact(model.config.n_embd))
+                    .enumerate()
+                {
+                    expected += model.distribution(row)[token as usize];
+                    assert_eq!(
+                        run.cumulative[step + 1].to_bits(),
+                        expected.to_bits(),
+                        "context={context:?}, length={length}, step={}",
+                        step + 1
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
     fn resumed_scores_keep_exact_bits() {
         let mut scorer = reranker();
         let first = ["我今天去上班", "我今天去工作"];
@@ -1112,6 +1671,40 @@ mod tests {
         let backward = again.log_probabilities("昨天", &["我今天去工作", "我今天去上班"]);
         assert_eq!(forward[0].to_bits(), backward[1].to_bits());
         assert_eq!(forward[1].to_bits(), backward[0].to_bits());
+    }
+
+    #[test]
+    fn single_characters_use_the_prefix_distribution_with_exact_score_bits() {
+        let mut scorer = reranker();
+        for context in ["", "医生调整了药物的", &"昨天".repeat(50)] {
+            for candidates in [vec!["剂", "纸", "我"], vec!["我", "我们", "我今天", "剂"]]
+            {
+                let expected = scorer.model.score(context, &candidates);
+                let actual = scorer.log_probabilities(context, &candidates);
+                for ((text, actual), expected) in candidates.iter().zip(actual).zip(expected) {
+                    if text.chars().count() == 1 {
+                        assert_eq!(actual.to_bits(), expected.to_bits());
+                    }
+                }
+                assert!(scorer.resume.iter().all(|(tail, _)| tail.len() > 1));
+            }
+        }
+        scorer.log_probabilities("昨天", &["我", "今"]);
+        assert!(scorer.resume.is_empty());
+        let candidates = ["我今天", "今天", "我"];
+        let mut fresh = super::Reranker::new(std::sync::Arc::clone(&scorer.model));
+        let expected = fresh.log_probabilities("昨天", &candidates);
+        let actual = scorer.log_probabilities("昨天", &candidates);
+        assert_eq!(
+            actual
+                .iter()
+                .map(|score| score.to_bits())
+                .collect::<Vec<_>>(),
+            expected
+                .iter()
+                .map(|score| score.to_bits())
+                .collect::<Vec<_>>()
+        );
     }
 
     #[test]
@@ -1151,6 +1744,10 @@ mod tests {
             (vec!["我今"], vec!["我今天去上班", "我今天去上班了"]),
             (vec!["我今天去上班"], vec!["我今天去工作", "我今天去上班了"]),
             (vec!["我今天去上班"], vec!["我今天去上课", "我今天去工作"]),
+            (
+                vec!["我今天去上班", "我今天去工作"],
+                vec!["我今天去工作", "我今天去上班", "我今天去上班了"],
+            ),
             (vec![], vec!["我今天", "我今天", "我今", "", "我"]),
         ] {
             let mut scorer = super::Reranker::new(std::sync::Arc::clone(&scorer.model));
@@ -1168,7 +1765,7 @@ mod tests {
             }
             assert_eq!(
                 scorer.resume.len(),
-                candidates.iter().filter(|t| !t.is_empty()).count()
+                candidates.iter().filter(|t| t.chars().count() > 1).count()
             );
         }
         let mut scorer = super::Reranker::new(std::sync::Arc::clone(&scorer.model));

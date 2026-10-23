@@ -19,6 +19,37 @@ CACHE.mkdir(parents=True, exist_ok=True)
 
 @unittest.skipIf(PREPARE is None, "corpus preparation requires pyarrow and opencc-python-reimplemented")
 class CorpusPreparationTests(unittest.TestCase):
+    def test_changed_fixed_cqia_source_is_rejected_before_outputs(self):
+        with tempfile.TemporaryDirectory(prefix="cqia-hash-", dir=CACHE) as temporary:
+            directory = Path(temporary)
+            sources = directory / "sources"
+            sources.mkdir()
+            args = ["prepare_general_corpus.py", "--root", str(directory), "--output", str(directory / "out"),
+                    "--evidence", str(directory / "evidence"), "--previous-train", str(directory / "previous.txt")]
+            for entry in PREPARE.SOURCE_FILES["cqia"]:
+                with self.subTest(source=entry[0]):
+                    (sources / entry[0]).write_text("changed public source\n")
+                    self.assertRegex(entry[4], r"^[0-9a-f]{64}$")
+                    with mock.patch.object(PREPARE, "SOURCE_FILES", {"cqia": [entry]}), mock.patch("sys.argv", args):
+                        with self.assertRaisesRegex(ValueError, "SHA256 mismatch") as error:
+                            PREPARE.main()
+                    self.assertIn(entry[4], str(error.exception))
+                    self.assertFalse((directory / "out").exists())
+                    self.assertFalse((directory / "evidence").exists())
+
+    def test_specs_retain_naturalconv_license_conditions(self):
+        with tempfile.TemporaryDirectory(prefix="source-attributions-", dir=CACHE) as temporary:
+            output = Path(temporary)
+            with mock.patch.object(PREPARE, "vocabulary", return_value=(["<pad>", "<unk>", "<bos>", "字"], {})):
+                PREPARE.make_specs(output, output, output / "dictionary", Counter(), "public sources")
+            for name in ("compact", "small", "large"):
+                with self.subTest(spec=name):
+                    attribution = json.loads((output / f"{name}-spec.json").read_text())["provenance"]["source_attributions"]["naturalconv"]
+                    self.assertEqual(attribution["declared_license"], "Tencent NaturalConv dataset license; non-commercial use only")
+                    self.assertEqual(attribution["license_url"], "https://huggingface.co/datasets/xywang1/NaturalConv/raw/adb38574e8014ada1d8404247167582e76b22d05/LICENSE")
+                    self.assertEqual(attribution["license_sha256"], "b51724699c7602950328471609ef586995eb7ecb870a93bc45eea79cd1a9946e")
+                    self.assertIn("Whether trained weights are derivative works requires separate review", attribution["license_restrictions"])
+
     def test_chinese_normalization_preserves_daily_and_medical_language(self):
         value = "你 去 哪 里 了 ， 今天 有 空 吗 ？\n這是牛乳和母乳的區別。\n好\nPython 程序很好用。"
         self.assertEqual(list(PREPARE.clean_paragraphs(value)),
@@ -109,7 +140,7 @@ class CorpusPreparationTests(unittest.TestCase):
                     (output / f"{name}-spec.json").write_text("{}\n")
                 return list(set("".join(texts))), {}
             args = ["prepare_general_corpus.py", "--root", str(directory), "--output", str(directory / "out"), "--evidence", str(directory / "evidence"), "--previous-train", str(previous)]
-            files = {"cqia": [(path.name, "public/repo", "fixed-revision", "file.jsonl", None)]}
+            files = {"cqia": [(path.name, "public/repo", "fixed-revision", "file.jsonl", PREPARE.digest(path))]}
             with mock.patch.object(PREPARE, "SOURCE_FILES", files), mock.patch.object(PREPARE, "make_specs", side_effect=specs), mock.patch("sys.argv", args), mock.patch("builtins.print"):
                 PREPARE.main()
             documents = [json.loads(line) for line in (directory / "out/documents.jsonl").read_text().splitlines()]
@@ -126,6 +157,8 @@ class CorpusPreparationTests(unittest.TestCase):
             self.assertEqual([row["text"] for row in excluded_documents], texts[1:])
             recipe = json.loads((directory / "excluded/data-recipe.json").read_text())
             self.assertIn({"path": str(exclusion), "sha256": PREPARE.digest(exclusion)}, recipe["eval_exclusion_files"])
+            self.assertEqual(recipe["sources"][0]["sha256"], files["cqia"][0][4])
+            self.assertIn("no unified license declared", recipe["sources"][0]["declared_license"])
             missing = directory / "missing.jsonl"
             missing_args = ["prepare_general_corpus.py", "--root", str(directory), "--output", str(directory / "missing-out"), "--evidence", str(directory / "missing-evidence"), "--previous-train", str(previous), "--exclude", str(missing)]
             with mock.patch.object(PREPARE, "SOURCE_FILES", files), mock.patch("sys.argv", missing_args):
@@ -189,7 +222,7 @@ class CorpusPreparationTests(unittest.TestCase):
                     (output / f"{name}-spec.json").write_text("{}\n")
                 return list(set(shared + fresh)), {}
             args = ["prepare_general_corpus.py", "--root", str(directory), "--output", str(directory / "out"), "--evidence", str(directory / "evidence"), "--previous-train", str(previous)]
-            files = {"cped": [(f"cped-{split}.csv", "public/repo", "fixed", "file.csv", None) for split in rows]}
+            files = {"cped": [(f"cped-{split}.csv", "public/repo", "fixed", "file.csv", PREPARE.digest(sources / f"cped-{split}.csv")) for split in rows]}
             with mock.patch.object(PREPARE, "SOURCE_FILES", files), mock.patch.object(PREPARE, "make_specs", side_effect=specs), mock.patch("sys.argv", args), mock.patch("builtins.print"):
                 PREPARE.main()
             self.assertEqual((directory / "out/train.txt").read_text(), shared + "\n")

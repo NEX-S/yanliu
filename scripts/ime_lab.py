@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Generate synthetic Chinese cases with deepseek-flash through llmux and check them with yanliu evaluate.
 
-Each round asks the teacher for context/gold/bucket cases, derives target pinyin using context with
-the pinned pypinyin and rejects cases outside the fixed rules. A bad teacher batch is recorded and
-the next round continues; HTTP, gateway and CLI errors stop the run. Finite mode checks all cases
-at the end; --duration-hours checks and records issues after every batch until the deadline.
+Each round asks the teacher for context/gold/bucket cases, derives target pinyin from known phrases
+or context using pinned pypinyin and the public supplement, and rejects cases outside the fixed rules.
+A bad teacher batch is recorded and the next round continues; HTTP, gateway and CLI errors stop
+the run. Finite mode checks all cases at the end; --duration-hours checks and records issues after
+every batch until the deadline.
 Validated cases and round records are saved after each round, before the next request.
 Exit status: 0 all rounds valid, 2 some rounds failed, 1 no valid case.
 --generate-only saves validated cases without observing CLI candidate scores.
@@ -13,7 +14,6 @@ Round pair_range values are zero-based, with an exclusive end.
 """
 import argparse
 import hashlib
-from importlib.metadata import version
 import json
 import os
 from pathlib import Path
@@ -27,10 +27,12 @@ import urllib.error
 import urllib.request
 
 from pypinyin import Style, lazy_pinyin
+from pypinyin.constants import PHRASES_DICT
+import pinyin_phrases
 
 ROOT = Path(__file__).resolve().parents[1]
 TEACHER_MODEL = "deepseek-flash"
-PYPINYIN_VERSION = "0.55.0"
+PINYIN_PHRASES = Path("data/training/pinyin-phrases.json")
 BUCKETS = ("daily", "software", "science", "office")
 GOLD = re.compile(r"[\u4e00-\u9fff]{1,8}")
 CONTEXT = re.compile(r"[\u4e00-\u9fff，。！？；：、（）“”‘’…—]{0,32}")
@@ -89,7 +91,9 @@ def teacher_cases(response):
 
 
 def pinyin(gold, context=""):
-    return "".join(lazy_pinyin(context + gold, style=Style.NORMAL)[-len(gold):])
+    # Keep a known target phrase intact instead of letting context absorb its first character.
+    text = [gold] if len(gold) > 1 and gold in PHRASES_DICT else context + gold
+    return "".join(lazy_pinyin(text, style=Style.NORMAL)[-len(gold):])
 
 
 def load_pairs(path):
@@ -206,6 +210,8 @@ def prompt(round_number, count, seen, focus, pairs=None):
 def continuous_files(args):
     return {
         "generator": sha256(Path(__file__).resolve()),
+        "pinyin_phrases": sha256(ROOT / PINYIN_PHRASES),
+        "pinyin_phrases_loader": sha256(Path(pinyin_phrases.__file__).resolve()),
         "binary": sha256(args.binary), "model": sha256(args.model),
         "dictionaries": {path.name: sha256(path) for path in sorted(args.dictionary_dir.glob("*.dict.yaml"))},
         "source": {str(path.relative_to(ROOT)): sha256(path) for path in
@@ -256,11 +262,11 @@ class DurationElapsed(Exception):
 
 
 def run_continuous(args):
-    if version("pypinyin") != PYPINYIN_VERSION:
-        raise ValueError(f"pypinyin must be exactly {PYPINYIN_VERSION}")
+    phrases_sha256 = pinyin_phrases.load_pinyin_phrases(ROOT / PINYIN_PHRASES)
     args.binary, args.model = args.binary.resolve(), args.model.resolve()
     args.dictionary_dir = args.dictionary_dir.resolve()
     files = continuous_files(args)
+    files["pinyin_phrases"] = phrases_sha256
     if not files["dictionaries"]:
         raise ValueError("no public dictionaries in --dictionary-dir")
     output = args.output_dir.absolute()
@@ -272,7 +278,7 @@ def run_continuous(args):
     timestamp = lambda: datetime.now(timezone.utc).isoformat()
     summary = {
         "status": "running", "mode": "continuous", "teacher_model": TEACHER_MODEL,
-        "endpoint": endpoint, "pypinyin": PYPINYIN_VERSION, "argv": sys.argv,
+        "endpoint": endpoint, "pypinyin": pinyin_phrases.PYPINYIN_VERSION, "argv": sys.argv,
         "files": files, "started_at": datetime.fromtimestamp(started, timezone.utc).isoformat(),
         "deadline_at": datetime.fromtimestamp(started + duration, timezone.utc).isoformat(),
         "duration_seconds": duration, "interval_seconds": args.interval_seconds,
@@ -289,7 +295,7 @@ def run_continuous(args):
         number = 0
         while time.monotonic() < deadline:
             if continuous_files(args) != files:
-                raise ValueError("measured source, generator, binary, model or dictionaries changed during the run")
+                raise ValueError("measured source, generator, pinyin phrases or loader, binary, model or dictionaries changed during the run")
             number += 1
             name = f"round-{number:03d}"
             current = {"round": number, "started_at": timestamp(), "status": "running"}
@@ -383,14 +389,15 @@ def run_continuous(args):
 
 
 def run(args):
-    if version("pypinyin") != PYPINYIN_VERSION:
-        raise ValueError(f"pypinyin must be exactly {PYPINYIN_VERSION}")
+    phrases_sha256 = pinyin_phrases.load_pinyin_phrases(ROOT / PINYIN_PHRASES)
     endpoint = args.endpoint.rstrip("/")
     pairs = load_pairs(args.pairs) if args.pairs is not None else None
     if pairs is not None and (args.rounds - 1) * (args.cases_per_round // 4) >= len(pairs):
         raise ValueError("--rounds exceeds the available pair batches")
     output, binary, model = args.output_dir.absolute(), args.binary.resolve(), args.model.resolve()
-    files = {"generator": sha256(Path(__file__).resolve()), "binary": sha256(binary), "model": sha256(model),
+    files = {"generator": sha256(Path(__file__).resolve()), "pinyin_phrases": phrases_sha256,
+             "pinyin_phrases_loader": sha256(Path(pinyin_phrases.__file__).resolve()),
+             "binary": sha256(binary), "model": sha256(model),
              "dictionaries": {path.name: sha256(path)
                               for path in sorted((ROOT / "data/dictionaries").glob("*.dict.yaml"))}}
     if pairs is not None:
@@ -449,7 +456,7 @@ def run(args):
         "status": status, "mode": "pairs" if pairs is not None else "general",
         "generate_only": args.generate_only, "check_skipped": args.generate_only or not case_count,
         "teacher_model": TEACHER_MODEL, "endpoint": endpoint,
-        "pypinyin": PYPINYIN_VERSION, "argv": sys.argv, "files": files, "rounds": rounds, "buckets": buckets,
+        "pypinyin": pinyin_phrases.PYPINYIN_VERSION, "argv": sys.argv, "files": files, "rounds": rounds, "buckets": buckets,
     })
     print(json.dumps({"status": status, "output_dir": str(output), "cases": case_count,
                       "failed_rounds": failed, "all": buckets.get("all")}, ensure_ascii=False), flush=True)

@@ -14,6 +14,46 @@ pub struct SessionSnapshot {
     pub learning: Option<Arc<Learning>>,
 }
 
+impl SessionSnapshot {
+    pub(crate) fn include_candidates(&mut self, additional: &[Candidate]) -> Vec<usize> {
+        let mut changed = false;
+        for candidate in additional {
+            let matching = |existing: &Candidate| {
+                existing.text == candidate.text && existing.consumed == candidate.consumed
+            };
+            if self.candidates.iter().any(|existing| {
+                matching(existing)
+                    && existing.source != CandidateSource::Completion
+                    && !existing.source.is_correction()
+            }) {
+                continue;
+            }
+            // A proven verbatim path supersedes an incomplete or corrected reading.
+            self.candidates.retain(|existing| !matching(existing));
+            self.candidates.push(candidate.clone());
+            changed = true;
+        }
+        if changed {
+            self.candidates = rank_candidates(
+                &self.input,
+                self.learning.as_deref(),
+                std::mem::take(&mut self.candidates),
+            );
+        }
+        additional
+            .iter()
+            .map(|candidate| {
+                self.candidates
+                    .iter()
+                    .position(|existing| {
+                        existing.text == candidate.text && existing.consumed == candidate.consumed
+                    })
+                    .expect("included candidate is present")
+            })
+            .collect()
+    }
+}
+
 pub struct Session {
     decoder: Arc<Decoder>,
     decode_cache: DecodeCache,
@@ -112,7 +152,6 @@ impl Session {
         self.input.drain(..candidate.consumed);
         self.cursor = self.cursor.saturating_sub(candidate.consumed);
         self.append_context(&candidate.text);
-        self.refresh();
         Some(candidate.text)
     }
     pub fn commit_raw(&mut self) -> Option<String> {
@@ -122,7 +161,6 @@ impl Session {
         let text = std::mem::take(&mut self.input);
         self.cursor = 0;
         self.append_context(&text);
-        self.refresh();
         Some(text)
     }
     pub fn reset(&mut self) {
@@ -131,17 +169,23 @@ impl Session {
         self.context.clear();
         self.refresh();
     }
-    pub fn set_context(&mut self, context: &str) {
+    pub fn set_context(&mut self, context: &str) -> bool {
         let start = context
             .char_indices()
             .rev()
             .nth(63)
             .map_or(0, |(index, _)| index);
-        self.context = context[start..].to_owned();
-        self.revision += 1;
+        let context = &context[start..];
+        if self.context != context {
+            self.context = context.to_owned();
+            self.refresh();
+            true
+        } else {
+            false
+        }
     }
     /// Move the candidate a ranker proposed for `revision`; false when the input has changed.
-    pub fn apply_promotion(&mut self, revision: u64, index: usize) -> bool {
+    fn apply_promotion(&mut self, revision: u64, index: usize) -> bool {
         if revision != self.revision {
             return false;
         }
@@ -177,9 +221,27 @@ impl Session {
         }
         true
     }
+    /// Apply a background result without changing input or advancing its revision.
+    pub fn apply_candidates(
+        &mut self,
+        revision: u64,
+        candidates: Vec<Candidate>,
+        preferred: Option<usize>,
+    ) -> bool {
+        if revision != self.revision {
+            return false;
+        }
+        self.candidates = candidates;
+        if let Some(index) = preferred {
+            self.apply_promotion(revision, index);
+        }
+        true
+    }
     fn append_context(&mut self, text: &str) {
         let context = format!("{}{text}", self.context);
-        self.set_context(&context);
+        if !self.set_context(&context) {
+            self.refresh();
+        }
     }
     fn refresh(&mut self) {
         self.revision += 1;
@@ -193,68 +255,73 @@ impl Session {
         if let Some(learning) = &self.learning {
             candidates.extend(learning.recall(&self.input, &candidates));
         }
-        let counts = match &self.learning {
-            Some(learning) => learning.counts(&self.input, &candidates),
-            None => vec![0; candidates.len()],
-        };
-        let mut ranked: Vec<_> = candidates.into_iter().zip(counts).collect();
-        for (candidate, count) in &mut ranked {
-            if *count > 0 {
-                candidate.source = CandidateSource::User;
-            }
-        }
-        let class = |candidate: &Candidate| {
-            if candidate.consumed == self.input.len() {
-                2
-            } else if candidate.consumed > 0
-                && self.input.as_bytes()[candidate.consumed - 1] == b'\''
-            {
-                1
-            } else {
-                0
-            }
-        };
-        ranked.sort_by(|(a, ac), (b, bc)| {
-            class(b)
-                .cmp(&class(a))
-                .then(b.consumed.cmp(&a.consumed))
-                .then(bc.cmp(ac))
-                .then(b.score.total_cmp(&a.score))
-        });
-        self.candidates = ranked.into_iter().map(|(candidate, _)| candidate).collect();
-        if !self
-            .candidates
-            .iter()
-            .any(|c| c.consumed == self.input.len() && c.source.is_correction())
-        {
-            return;
-        }
-        // Corrections share only full-conversion slots; learned, partial and
-        // Completion candidates keep the positions established above.
-        let slots: Vec<_> = self
-            .candidates
-            .iter()
-            .enumerate()
-            .filter_map(|(index, c)| {
-                (c.consumed == self.input.len()
-                    && !matches!(
-                        c.source,
-                        CandidateSource::User | CandidateSource::Completion
-                    ))
-                .then_some(index)
-            })
-            .collect();
-        for next in 1..slots.len() {
-            let mut position = next;
-            while position > 0
-                && self.candidates[slots[position - 1]].source.is_correction()
-                && !self.candidates[slots[position]].source.is_correction()
-            {
-                self.candidates.swap(slots[position - 1], slots[position]);
-                position -= 1;
-            }
+        self.candidates = rank_candidates(&self.input, self.learning.as_deref(), candidates);
+    }
+}
+
+fn rank_candidates(
+    input: &str,
+    learning: Option<&Learning>,
+    candidates: Vec<Candidate>,
+) -> Vec<Candidate> {
+    let counts = match learning {
+        Some(learning) => learning.counts(input, &candidates),
+        None => vec![0; candidates.len()],
+    };
+    let mut ranked: Vec<_> = candidates.into_iter().zip(counts).collect();
+    for (candidate, count) in &mut ranked {
+        if *count > 0 {
+            candidate.source = CandidateSource::User;
         }
     }
+    let class = |candidate: &Candidate| {
+        if candidate.consumed == input.len() {
+            2
+        } else if candidate.consumed > 0 && input.as_bytes()[candidate.consumed - 1] == b'\'' {
+            1
+        } else {
+            0
+        }
+    };
+    ranked.sort_by(|(a, ac), (b, bc)| {
+        class(b)
+            .cmp(&class(a))
+            .then(b.consumed.cmp(&a.consumed))
+            .then(bc.cmp(ac))
+            .then(b.score.total_cmp(&a.score))
+    });
+    let mut candidates: Vec<_> = ranked.into_iter().map(|(candidate, _)| candidate).collect();
+    if !candidates
+        .iter()
+        .any(|c| c.consumed == input.len() && c.source.is_correction())
+    {
+        return candidates;
+    }
+    // Corrections share only full-conversion slots; learned, partial and
+    // Completion candidates keep the positions established above.
+    let slots: Vec<_> = candidates
+        .iter()
+        .enumerate()
+        .filter_map(|(index, c)| {
+            (c.consumed == input.len()
+                && !matches!(
+                    c.source,
+                    CandidateSource::User | CandidateSource::Completion
+                ))
+            .then_some(index)
+        })
+        .collect();
+    for next in 1..slots.len() {
+        let mut position = next;
+        while position > 0
+            && candidates[slots[position - 1]].source.is_correction()
+            && !candidates[slots[position]].source.is_correction()
+        {
+            candidates.swap(slots[position - 1], slots[position]);
+            position -= 1;
+        }
+    }
+    candidates
 }
 
 #[cfg(test)]
@@ -282,6 +349,130 @@ mod cache_tests {
             );
         }
     }
+    #[test]
+    fn refined_menu_preserves_existing_paths_and_learns_the_selected_conversion() {
+        let learning = Arc::new(Learning::new(false));
+        let mut session = Session::new(decoder(), Some(learning.clone()));
+        session.insert("nihao").unwrap();
+        session.set_context("请先");
+        let mut snapshot = session.snapshot();
+        let existing = snapshot.candidates[0].clone();
+        let mut duplicate = existing.clone();
+        duplicate.source = CandidateSource::Composed;
+        duplicate.score = -99.0;
+        let added = Candidate {
+            text: "拟好".into(),
+            consumed: 5,
+            source: CandidateSource::Composed,
+            score: -4.0,
+        };
+        let mut completion = added.clone();
+        completion.source = CandidateSource::Completion;
+        snapshot.candidates.push(completion);
+        let included = snapshot.include_candidates(&[duplicate, added.clone()]);
+        assert_eq!(snapshot.candidates[included[0]], existing);
+        assert_eq!(snapshot.candidates[included[1]], added);
+        assert_eq!(
+            snapshot
+                .candidates
+                .iter()
+                .filter(|c| c.text == "拟好")
+                .count(),
+            1
+        );
+        let revision = session.revision();
+        let cursor = session.cursor();
+        assert!(session.apply_candidates(revision, snapshot.candidates, Some(included[1])));
+        assert_eq!((session.input(), session.context()), ("nihao", "请先"));
+        assert_eq!((session.revision(), session.cursor()), (revision, cursor));
+        assert_eq!(session.select(0).as_deref(), Some("拟好"));
+        assert_eq!(learning.counts("nihao", [&added]), vec![1]);
+        assert_eq!(session.input(), "");
+    }
+
+    #[test]
+    fn stale_candidate_set_does_not_replace_the_current_menu() {
+        let mut session = Session::new(decoder(), None);
+        session.insert("ni").unwrap();
+        let snapshot = session.snapshot();
+        session.insert("hao").unwrap();
+        let current = session.snapshot();
+        assert!(!session.apply_candidates(snapshot.revision, snapshot.candidates, Some(0)));
+        assert_eq!(session.candidates(), current.candidates);
+        assert_eq!(session.revision(), current.revision);
+    }
+
+    #[test]
+    fn identical_bounded_context_keeps_the_refined_menu_and_revision() {
+        let mut session = Session::new(decoder(), None);
+        let context = "前".repeat(64);
+        assert!(session.set_context(&context));
+        session.insert("ni").unwrap();
+        let snapshot = session.snapshot();
+        session.apply_candidates(snapshot.revision, snapshot.candidates, Some(1));
+        let ranked = session.snapshot();
+        for same in [context.clone(), format!("忽略的旧前文{context}")] {
+            assert!(!session.set_context(&same));
+            assert_eq!(session.candidates(), ranked.candidates);
+            assert_eq!(session.revision(), ranked.revision);
+        }
+    }
+
+    #[test]
+    fn commit_refreshes_input_even_when_the_bounded_context_is_unchanged() {
+        let decoder = Arc::new(Decoder::new(
+            Dictionary::from_rime_reader(Cursor::new("...\n前\tqian\t100\n")).unwrap(),
+        ));
+        let mut session = Session::new(decoder, None);
+        let context = "前".repeat(64);
+        session.set_context(&context);
+        session.insert("qian").unwrap();
+        let revision = session.revision();
+        assert_eq!(session.select(0).as_deref(), Some("前"));
+        assert_eq!(session.context(), context);
+        assert!(session.input().is_empty());
+        assert!(session.candidates().is_empty());
+        assert!(session.revision() > revision);
+    }
+
+    #[test]
+    fn context_updates_drop_old_neural_paths_but_keep_explicit_choices() {
+        let learning = Arc::new(Learning::new(false));
+        let mut session = Session::new(decoder(), Some(learning));
+        session.insert("nihao").unwrap();
+        let candidate = |text: &str| Candidate {
+            text: text.into(),
+            consumed: 5,
+            source: CandidateSource::Composed,
+            score: -4.0,
+        };
+        let mut snapshot = session.snapshot();
+        let indices = snapshot.include_candidates(&[candidate("拟好")]);
+        session.apply_candidates(snapshot.revision, snapshot.candidates, Some(indices[0]));
+        assert_eq!(session.select(0).as_deref(), Some("拟好"));
+        session.insert("nihao").unwrap();
+        let baseline_len = session.candidates().len();
+        for (context, text) in [("请先", "倪好"), ("正在", "泥好")] {
+            let previous = session.snapshot();
+            session.set_context(context);
+            assert_eq!(session.candidates().len(), baseline_len);
+            assert!(
+                session
+                    .candidates()
+                    .iter()
+                    .any(|c| { c.text == "拟好" && c.source == CandidateSource::User })
+            );
+            assert!(!session.apply_candidates(previous.revision, previous.candidates, None));
+            let mut snapshot = session.snapshot();
+            snapshot.include_candidates(&[candidate(text)]);
+            assert!(session.apply_candidates(snapshot.revision, snapshot.candidates, None));
+            assert_eq!(session.candidates().len(), baseline_len + 1);
+            assert_eq!((session.input(), session.cursor()), ("nihao", 5));
+        }
+        assert!(!session.candidates().iter().any(|c| c.text == "倪好"));
+        assert!(session.candidates().iter().any(|c| c.text == "泥好"));
+    }
+
     #[test]
     fn completion_selection_commits_raw_consumption_without_learning() {
         let decoder = decoder();

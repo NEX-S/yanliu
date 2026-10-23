@@ -1,5 +1,5 @@
-//! Language-model promotion over existing decoder candidates.
-use crate::{Candidate, CandidateSource, session::SessionSnapshot};
+//! Bounded pinyin recall and language-model promotion.
+use crate::{Candidate, CandidateSource, Decoder, session::SessionSnapshot};
 use chinese_ime_lm::{Reranker, SentenceModel};
 use serde::Serialize;
 use std::{error::Error, path::Path, sync::Arc};
@@ -64,13 +64,46 @@ impl Model {
         Ok(Self { backend })
     }
 
-    /// Return the index of at most one full-input candidate to move to the front.
-    pub fn promotion(&mut self, session: &SessionSnapshot) -> Result<Option<usize>> {
-        Ok(self.explain_promotion(session)?.index)
+    /// Enrich a snapshot with proven pinyin paths, then score its actual menu.
+    /// A cancelled result must not be applied to the live session.
+    pub fn refine(
+        &mut self,
+        session: &mut SessionSnapshot,
+        decoder: &Decoder,
+        mut still_current: impl FnMut() -> bool,
+    ) -> Result<Option<Promotion>> {
+        if !still_current() {
+            return Ok(None);
+        }
+        let additional = match &mut self.backend {
+            Backend::Cpu(reranker) => {
+                let Some(candidates) = decoder.neural_candidates(
+                    &session.input,
+                    &session.context,
+                    reranker,
+                    &mut still_current,
+                )?
+                else {
+                    return Ok(None);
+                };
+                candidates
+            }
+            #[cfg(feature = "accelerator")]
+            Backend::Accelerator(_) => Vec::new(),
+        };
+        let included = session.include_candidates(&additional);
+        if !still_current() {
+            return Ok(None);
+        }
+        let promotion = self.score_candidates(session, &included)?;
+        Ok(still_current().then_some(promotion))
     }
 
-    /// The same calculation used by promotion, with contributions for offline diagnostics.
-    pub fn explain_promotion(&mut self, session: &SessionSnapshot) -> Result<Promotion> {
+    fn score_candidates(
+        &mut self,
+        session: &SessionSnapshot,
+        included: &[usize],
+    ) -> Result<Promotion> {
         let SessionSnapshot {
             input,
             context,
@@ -79,7 +112,44 @@ impl Model {
             ..
         } = session;
         let personal = learning.as_deref().filter(|learning| learning.contextual());
-        let considered = shortlist(input, context, candidates, personal.is_some());
+        let limit = match &self.backend {
+            Backend::Cpu(_) => 16,
+            #[cfg(feature = "accelerator")]
+            Backend::Accelerator(_) => 9,
+        };
+        let mut considered = shortlist(input, context, candidates, personal.is_some(), limit);
+        if !considered.is_empty() {
+            for &index in included {
+                let candidate = &candidates[index];
+                if answers_input(input, candidate)
+                    && candidate.source.is_correction() == candidates[0].source.is_correction()
+                    && !considered.contains(&index)
+                {
+                    considered.push(index);
+                }
+            }
+        }
+        if !considered.is_empty() && matches!(&self.backend, Backend::Cpu(_)) {
+            // CPU single characters share the prefix's next-character distribution and need
+            // no tail inference. The fixed accelerator IR keeps its nine-candidate batch.
+            for (index, _) in candidates
+                .iter()
+                .enumerate()
+                .filter(|(_, c)| {
+                    answers_input(input, c)
+                        && c.source.is_correction() == candidates[0].source.is_correction()
+                        && c.text.chars().count() == 1
+                        && c.text
+                            .chars()
+                            .all(|ch| ('\u{4e00}'..='\u{9fff}').contains(&ch))
+                })
+                .take(64)
+            {
+                if !considered.contains(&index) {
+                    considered.push(index);
+                }
+            }
+        }
         if considered.len() < 2 {
             return Ok(Promotion {
                 prior_scale: 1.0,
@@ -100,25 +170,20 @@ impl Model {
                 )) {
             vec![0.0; texts.len()]
         } else {
-            self.language_scores(context, &texts)?
+            self.language_scores(
+                context,
+                &texts,
+                candidates[0].source == CandidateSource::Composed,
+            )?
         };
         let dictionary_prior = matches!(
             candidates[0].source,
             CandidateSource::ExactDictionary | CandidateSource::User
         );
-        let leader_language = language[0];
         let mut scores: Vec<_> = considered
             .iter()
             .zip(language)
             .map(|(&index, language)| {
-                // Public fluency cannot replace a recalled word with a segmented homophone.
-                // Explicit personal evidence is added after this public prior.
-                let language =
-                    if dictionary_prior && candidates[index].source == CandidateSource::Composed {
-                        language.min(leader_language)
-                    } else {
-                        language
-                    };
                 // Composed beam scores contain segmentation costs, not word-frequency evidence.
                 let dictionary = if dictionary_prior {
                     -STATIC_GAP_PENALTY * (candidates[0].score - candidates[index].score).max(0.0)
@@ -178,7 +243,12 @@ impl Model {
         })
     }
 
-    fn language_scores(&mut self, context: &str, texts: &[&str]) -> Result<Vec<f32>> {
+    fn language_scores(
+        &mut self,
+        context: &str,
+        texts: &[&str],
+        composed_leader: bool,
+    ) -> Result<Vec<f32>> {
         let window = match &self.backend {
             Backend::Cpu(reranker) => reranker.model().context_length(),
             #[cfg(feature = "accelerator")]
@@ -222,8 +292,14 @@ impl Model {
         // An unrepresented candidate gets no language advantage over the leader; dictionary
         // evidence and explicit personal choices still apply to it.
         let mut scores = vec![known_scores[0]; texts.len()];
+        let leader_length = texts[0].chars().count() as f32;
         for (&index, score) in known.iter().zip(known_scores) {
-            scores[index] = score;
+            // A shared denominator keeps extra segmentation from diluting its token costs.
+            scores[index] = if composed_leader {
+                score * (texts[index].chars().count() as f32 / leader_length)
+            } else {
+                score
+            };
         }
         Ok(scores)
     }
@@ -256,6 +332,7 @@ fn shortlist(
     candidates: &[Candidate],
     // Contextual learning may overrule the leader that is otherwise protected.
     personal: bool,
+    limit: usize,
 ) -> Vec<usize> {
     let Some(leader) = candidates.first() else {
         return Vec::new();
@@ -268,13 +345,13 @@ fn shortlist(
     {
         return Vec::new();
     }
-    let mut eligible = candidates
-        .iter()
-        .enumerate()
-        .filter_map(|(i, c)| answers_input(input, c).then_some(i));
-    let mut selected: Vec<usize> = eligible.by_ref().take(7).collect();
+    let mut eligible = candidates.iter().enumerate().filter_map(|(i, c)| {
+        (answers_input(input, c) && c.source.is_correction() == leader.source.is_correction())
+            .then_some(i)
+    });
+    let mut selected: Vec<usize> = eligible.by_ref().take(limit - 2).collect();
     for i in eligible.clone() {
-        if selected.len() == 9 {
+        if selected.len() == limit {
             break;
         }
         let length = candidates[i].text.chars().count();
@@ -286,7 +363,7 @@ fn shortlist(
         }
     }
     for i in eligible {
-        if selected.len() == 9 {
+        if selected.len() == limit {
             break;
         }
         if !selected.contains(&i) {
@@ -338,9 +415,9 @@ mod tests {
         ];
         for context in ["", "我去", "此时此刻", "乘火车前往"] {
             let mut session = snapshot("xian", context, &candidates);
-            let base = model.explain_promotion(&session).unwrap();
+            let base = model.score_candidates(&session, &[]).unwrap();
             session.learning = Some(Arc::new(Learning::new(true)));
-            let personal = model.explain_promotion(&session).unwrap();
+            let personal = model.score_candidates(&session, &[]).unwrap();
             assert_eq!(base.index, personal.index, "context={context}");
             assert_eq!(personal.prior_scale, 1.0);
             assert_eq!(
@@ -351,59 +428,62 @@ mod tests {
     }
 
     #[test]
-    fn public_fluency_cannot_promote_a_composition_over_a_recalled_word() {
+    fn composed_candidates_compete_under_the_same_language_and_static_prior() {
         let mut model = model();
         let mut candidates = [
             candidate("现", 4, CandidateSource::ExactDictionary),
             candidate("西安", 4, CandidateSource::Composed),
         ];
-        let raw = model.language_scores("我去", &["现", "西安"]).unwrap();
+        let raw = model
+            .language_scores("我去", &["现", "西安"], false)
+            .unwrap();
         assert!(raw[1] > raw[0] + PROMOTION_MARGIN);
-        for source in [CandidateSource::ExactDictionary, CandidateSource::User] {
-            candidates[0].source = source;
-            let mut session = snapshot("xian", "我去", &candidates);
-            assert_eq!(model.promotion(&session).unwrap(), None);
-            session.learning = Some(Arc::new(Learning::new(true)));
-            let result = model.explain_promotion(&session).unwrap();
-            assert_eq!(result.index, None);
-            assert_eq!(result.scores[1].language, raw[0]);
-            assert_eq!(result.prior_scale, 1.0);
-        }
-        candidates[0].source = CandidateSource::ExactDictionary;
-        candidates[1].source = CandidateSource::ExactDictionary;
-        assert_eq!(
-            model
-                .promotion(&snapshot("xian", "我去", &candidates))
-                .unwrap(),
-            Some(1)
-        );
-        candidates[0].source = CandidateSource::Composed;
-        candidates[1].source = CandidateSource::Composed;
-        assert_eq!(
-            model
-                .promotion(&snapshot("xian", "我去", &candidates))
-                .unwrap(),
-            Some(1)
-        );
-        candidates[0].source = CandidateSource::ExactDictionary;
+        let result = model
+            .score_candidates(&snapshot("xian", "我去", &candidates), &[])
+            .unwrap();
+        assert_eq!(result.index, Some(1));
+        assert_eq!(result.scores[1].language, raw[1]);
+        assert_eq!(result.scores[1].dictionary, 0.0);
         candidates[1].score = 0.5;
         let result = model
-            .explain_promotion(&snapshot("xian", "我去", &candidates))
+            .score_candidates(&snapshot("xian", "我去", &candidates), &[])
             .unwrap();
-        assert_eq!(result.index, None);
-        assert_eq!(result.scores[1].language, raw[0]);
+        assert_eq!(result.scores[1].language, raw[1]);
         assert_eq!(result.scores[1].dictionary, -1.0);
+    }
 
-        let learning = Arc::new(Learning::new(true));
-        for _ in 0..4 {
-            assert!(learning.record_choice("xian", "我去", &candidates, 1));
-        }
-        let mut session = snapshot("xian", "我去", &candidates);
-        session.learning = Some(learning);
-        let learned = model.explain_promotion(&session).unwrap();
-        assert_eq!(learned.scores[1].language, raw[0]);
-        assert!(learned.scores[1].personal > 0.0);
-        assert_eq!(learned.index, Some(1));
+    #[test]
+    fn correction_candidates_do_not_steal_an_ordinary_session_promotion() {
+        let decoder = Arc::new(Decoder::new(
+            Dictionary::from_rime_reader(Cursor::new(
+                "...\n现\txian\t100\n西安\txi an\t100\n轩\txuan\t1000000\n",
+            ))
+            .unwrap(),
+        ));
+        let mut session = Session::new(decoder.clone(), None);
+        session.set_context("我去");
+        session.insert("xian").unwrap();
+        let mut snapshot = session.snapshot();
+        assert!(
+            snapshot
+                .candidates
+                .iter()
+                .any(|c| { c.text == "轩" && c.source.is_correction() })
+        );
+        let decision = model()
+            .refine(&mut snapshot, &decoder, || true)
+            .unwrap()
+            .unwrap();
+        assert!(
+            decision
+                .scores
+                .iter()
+                .all(|s| { !snapshot.candidates[s.index].source.is_correction() })
+        );
+        let index = decision.index.unwrap();
+        assert_eq!(snapshot.candidates[index].text, "西安");
+        assert!(session.apply_candidates(snapshot.revision, snapshot.candidates, Some(index)));
+        assert_eq!(session.candidates()[0].text, "西安");
     }
 
     #[test]
@@ -422,7 +502,17 @@ mod tests {
                 session.set_context(context);
                 session.insert("kaiyuan").unwrap();
                 assert_eq!(session.candidates()[0].text, "开源");
-                assert_eq!(model.promotion(&session.snapshot()).unwrap(), None);
+                let mut snapshot = session.snapshot();
+                let result = model
+                    .refine(&mut snapshot, &decoder, || true)
+                    .unwrap()
+                    .unwrap();
+                assert!(session.apply_candidates(
+                    snapshot.revision,
+                    snapshot.candidates,
+                    result.index
+                ));
+                assert_eq!(session.candidates()[0].text, "开源");
             }
         }
     }
@@ -436,7 +526,7 @@ mod tests {
             .unwrap(),
         ));
         let learning = Arc::new(Learning::new(true));
-        let mut session = Session::new(decoder, Some(learning));
+        let mut session = Session::new(decoder.clone(), Some(learning));
         session.set_context("视频");
         session.insert("bizhan").unwrap();
         let chosen = session
@@ -450,7 +540,14 @@ mod tests {
         session.insert("bizhan").unwrap();
         assert_eq!(session.candidates()[0].text, "B站");
         assert_eq!(session.candidates()[0].source, CandidateSource::User);
-        assert_eq!(model().promotion(&session.snapshot()).unwrap(), None);
+        let mut snapshot = session.snapshot();
+        let result = model()
+            .refine(&mut snapshot, &decoder, || true)
+            .unwrap()
+            .unwrap();
+        assert!(session.apply_candidates(snapshot.revision, snapshot.candidates, result.index));
+        assert_eq!(session.candidates()[0].text, "B站");
+        assert_eq!(session.candidates()[0].source, CandidateSource::User);
     }
 
     #[test]
@@ -478,18 +575,58 @@ mod tests {
         let mut candidates = vec![candidate("现", 4, CandidateSource::Composed); 12];
         candidates[10].text = "西安".into();
         assert_eq!(
-            shortlist("xian", "我去", &candidates, false),
+            shortlist("xian", "我去", &candidates, false, 9),
             vec![0, 1, 2, 3, 4, 5, 6, 10, 7]
         );
         candidates[0].source = CandidateSource::ExactDictionary;
-        assert!(shortlist("xian", "", &candidates, false).is_empty());
-        assert_eq!(shortlist("xian", "我去", &candidates, false).len(), 9);
+        assert!(shortlist("xian", "", &candidates, false, 9).is_empty());
+        assert_eq!(shortlist("xian", "我去", &candidates, false, 9).len(), 9);
         candidates[0].source = CandidateSource::User;
-        assert!(shortlist("xian", "我去", &candidates, false).is_empty());
-        assert_eq!(shortlist("xian", "我去", &candidates, true).len(), 9);
+        assert!(shortlist("xian", "我去", &candidates, false, 9).is_empty());
+        assert_eq!(shortlist("xian", "我去", &candidates, true, 9).len(), 9);
         candidates[0].source = CandidateSource::Composed;
         candidates[0].consumed = 2;
-        assert!(shortlist("xian", "我去", &candidates, true).is_empty());
+        assert!(shortlist("xian", "我去", &candidates, true, 9).is_empty());
+    }
+
+    #[test]
+    fn cpu_word_shortlist_keeps_sixteen_with_two_length_diversity_slots() {
+        let mut candidates = vec![candidate("现", 4, CandidateSource::Composed); 20];
+        candidates[18].text = "西安".into();
+        candidates[19].text = "西安市".into();
+        let mut expected: Vec<_> = (0..14).collect();
+        expected.extend([18, 19]);
+        assert_eq!(shortlist("xian", "我去", &candidates, false, 16), expected);
+    }
+
+    #[test]
+    fn contextual_single_character_scores_reach_beyond_the_word_shortlist() {
+        let mut dictionary = "...\n".to_string();
+        for character in "及级即集极急几己既纪机鸡记季继济".chars() {
+            dictionary.push_str(&format!("{character}\tji\t1000\n"));
+        }
+        dictionary.push_str("剂\tji\t1\n");
+        let decoder = Arc::new(Decoder::new(
+            Dictionary::from_rime_reader(Cursor::new(dictionary)).unwrap(),
+        ));
+        let mut session = Session::new(decoder, None);
+        session.set_context("医生调整了药物的");
+        session.insert("ji").unwrap();
+        let snapshot = session.snapshot();
+        let index = snapshot
+            .candidates
+            .iter()
+            .position(|c| c.text == "剂")
+            .unwrap();
+        assert!(index >= 16);
+        let promotion = model().score_candidates(&snapshot, &[]).unwrap();
+        let score = promotion
+            .scores
+            .iter()
+            .find(|score| score.index == index)
+            .unwrap();
+        assert!(score.language.is_finite() && score.language < 0.0);
+        assert_eq!(session.candidates(), snapshot.candidates);
     }
 
     #[test]
@@ -500,7 +637,7 @@ mod tests {
         let mut model = model();
         assert!(
             model
-                .language_scores("我马上", &["了", "来"])
+                .language_scores("我马上", &["了", "来"], false)
                 .unwrap()
                 .iter()
                 .all(|s| *s < 0.0)
@@ -523,7 +660,7 @@ mod tests {
                     session.insert("l").unwrap();
                     assert_eq!(session.candidates()[0].source, CandidateSource::User);
                 }
-                let result = model.explain_promotion(&session.snapshot()).unwrap();
+                let result = model.score_candidates(&session.snapshot(), &[]).unwrap();
                 if contextual {
                     assert_eq!(result.scores.len(), 2);
                     assert!(result.scores.iter().all(|score| score.language == 0.0));
@@ -541,11 +678,11 @@ mod tests {
         ];
         for initial in b"bpmfdtnlgkhjqxrzcsywBPMFDTNLGKHJQXRZCSYW" {
             let input = char::from(*initial).to_string();
-            assert!(shortlist(&input, "前文", &candidates, false).is_empty());
-            assert_eq!(shortlist(&input, "前文", &candidates, true), [0, 1]);
+            assert!(shortlist(&input, "前文", &candidates, false, 9).is_empty());
+            assert_eq!(shortlist(&input, "前文", &candidates, true, 9), [0, 1]);
         }
         for vowel in ["a", "e", "o"] {
-            assert_eq!(shortlist(vowel, "前文", &candidates, false), [0, 1]);
+            assert_eq!(shortlist(vowel, "前文", &candidates, false, 9), [0, 1]);
         }
     }
 
@@ -554,18 +691,20 @@ mod tests {
         let mut model = model();
         assert_eq!(
             model
-                .language_scores("视频", &["避战", "必占", "B站"])
+                .language_scores("视频", &["避战", "必占", "B站"], false)
                 .unwrap(),
             vec![0.0; 3]
         );
         let long = "字".repeat(342);
         assert_eq!(
-            model.language_scores("前文", &[&long, "你"]).unwrap(),
+            model
+                .language_scores("前文", &[&long, "你"], false)
+                .unwrap(),
             vec![0.0; 2]
         );
         assert!(
             model
-                .language_scores("视频", &["避战", "必占"])
+                .language_scores("视频", &["避战", "必占"], false)
                 .unwrap()
                 .iter()
                 .all(|score| *score < 0.0)
@@ -577,8 +716,9 @@ mod tests {
         ];
         assert_eq!(
             model
-                .promotion(&snapshot("bizhan", "视频", &candidates))
-                .unwrap(),
+                .score_candidates(&snapshot("bizhan", "视频", &candidates), &[])
+                .unwrap()
+                .index,
             None
         );
     }
@@ -597,19 +737,59 @@ mod tests {
         for character in ['㨎', '𠮷'] {
             assert!(!sentence_model.contains_character(character));
         }
-        let known = model.language_scores("出", &["如", "入"]).unwrap();
-        let mixed = model.language_scores("出", &["如", "㨎", "入"]).unwrap();
+        let known = model.language_scores("出", &["如", "入"], false).unwrap();
+        let mixed = model
+            .language_scores("出", &["如", "㨎", "入"], false)
+            .unwrap();
         assert_eq!(mixed, vec![known[0], known[0], known[1]]);
         assert!(
             known[1] > known[0],
             "known homophones must still use context"
         );
         assert_eq!(
-            model.language_scores("出", &["㨎", "如", "入"]).unwrap(),
+            model
+                .language_scores("出", &["㨎", "如", "入"], false)
+                .unwrap(),
             vec![0.0; 3]
         );
-        let scores = model.language_scores("好", &["对", "㨎", "𠮷"]).unwrap();
+        let scores = model
+            .language_scores("好", &["对", "㨎", "𠮷"], false)
+            .unwrap();
         assert_eq!(scores, vec![0.0; 3]);
+    }
+
+    #[test]
+    fn full_candidate_likelihood_uses_the_leaders_length_and_keeps_oov_tied() {
+        let mut model = model();
+        let texts = ["手间吗", "手机按摩", "现", "㨎㨎㨎㨎㨎"];
+        let raw = match &mut model.backend {
+            Backend::Cpu(reranker) => reranker.log_probabilities("可以借用一下洗", &texts[..3]),
+            #[cfg(feature = "accelerator")]
+            Backend::Accelerator(_) => unreachable!("the test fixture loads the CPU model"),
+        };
+        let scores = model
+            .language_scores("可以借用一下洗", &texts, true)
+            .unwrap();
+        assert_eq!(scores[0], raw[0]);
+        assert_eq!(scores[1], raw[1] * (4.0 / 3.0));
+        assert_eq!(scores[2], raw[2] * (1.0 / 3.0));
+        assert_eq!(scores[3], scores[0]);
+
+        let input = "shoujianma";
+        let candidates: Vec<_> = texts
+            .iter()
+            .map(|text| candidate(text, input.len(), CandidateSource::Composed))
+            .collect();
+        let mut session = snapshot(input, "可以借用一下洗", &candidates);
+        let composed = model.score_candidates(&session, &[]).unwrap();
+        assert_eq!(composed.scores[1].language, scores[1]);
+        for source in [CandidateSource::ExactDictionary, CandidateSource::User] {
+            session.candidates[0].source = source;
+            session.learning = Some(Arc::new(Learning::new(true)));
+            let direct = model.score_candidates(&session, &[]).unwrap();
+            assert_eq!(direct.scores[1].language, raw[1]);
+            assert_eq!(direct.scores[3].language, raw[0]);
+        }
     }
 
     #[test]
@@ -628,7 +808,7 @@ mod tests {
             Backend::Accelerator(_) => unreachable!("the test fixture loads the CPU model"),
         };
         assert!(!sentence_model.contains_character('㨎'));
-        let mut session = Session::new(decoder, Some(learning));
+        let mut session = Session::new(decoder.clone(), Some(learning));
         session.set_context("牛");
         session.insert("ru").unwrap();
         let chosen = session
@@ -642,7 +822,14 @@ mod tests {
         session.insert("ru").unwrap();
         assert_eq!(session.candidates()[0].text, "㨎");
         assert_eq!(session.candidates()[0].source, CandidateSource::User);
-        assert_eq!(model.promotion(&session.snapshot()).unwrap(), None);
+        let mut snapshot = session.snapshot();
+        let result = model
+            .refine(&mut snapshot, &decoder, || true)
+            .unwrap()
+            .unwrap();
+        assert!(session.apply_candidates(snapshot.revision, snapshot.candidates, result.index));
+        assert_eq!(session.candidates()[0].text, "㨎");
+        assert_eq!(session.candidates()[0].source, CandidateSource::User);
     }
 
     #[test]
@@ -653,8 +840,9 @@ mod tests {
             candidate("西安", 4, CandidateSource::Composed),
         ];
         assert_eq!(
-            used.promotion(&snapshot("xian", "我去", &previous))
-                .unwrap(),
+            used.score_candidates(&snapshot("xian", "我去", &previous), &[])
+                .unwrap()
+                .index,
             Some(1)
         );
         let input = "wojintianqushangban";
@@ -663,10 +851,13 @@ mod tests {
             candidate("我今天去伤斑", input.len(), CandidateSource::Composed),
         ];
         assert_eq!(
-            used.promotion(&snapshot(input, "", &candidates)).unwrap(),
-            model()
-                .promotion(&snapshot(input, "", &candidates))
+            used.score_candidates(&snapshot(input, "", &candidates), &[])
                 .unwrap()
+                .index,
+            model()
+                .score_candidates(&snapshot(input, "", &candidates), &[])
+                .unwrap()
+                .index
         );
     }
 
@@ -693,8 +884,9 @@ mod tests {
         ];
         let promote = |model: &mut Model, context: &str, candidates: &[Candidate]| {
             model
-                .promotion(&snapshot("xian", context, candidates))
+                .score_candidates(&snapshot("xian", context, candidates), &[])
                 .unwrap()
+                .index
         };
         assert_eq!(promote(&mut model, "我去", &candidates), Some(2));
         candidates.rotate_right(1);

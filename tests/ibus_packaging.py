@@ -225,6 +225,10 @@ runpy.run_path(sys.argv[0], run_name='__main__')
     (share / 'models/NOTICE').write_text('user model notes\n')
     (fixture / 'data/models/NOTICE').write_text('new upstream attribution\n')
     result = install('--upgrade')
+    assert result.returncode == 0, result.stderr
+    assert (share / 'models/NOTICE').read_text() == 'user model notes\n'
+    assert 'models/NOTICE' not in json.loads((share / 'installation.json').read_text())['files']
+    result = install('--upgrade', YANLIU_MODEL_DIR=str(fixture / 'data/models'))
     assert result.returncode != 0 and 'conflict with an unmanaged file' in result.stderr
     assert (share / 'models/NOTICE').read_text() == 'user model notes\n'
     (share / 'models/NOTICE').unlink()
@@ -262,6 +266,10 @@ runpy.run_path(sys.argv[0], run_name='__main__')
     result = install('--upgrade')
     assert result.returncode == 0, result.stderr
     assert json.loads((previous / 'installation.json').read_text()) == record
+    current = json.loads((share / 'installation.json').read_text())
+    assert current['selected_model'] == record['selected_model']
+    assert current['model_provenance'] == 'models/provenance.json'
+    assert provenance.read_text() == '{"fixture":"historical"}\n'
     assert launcher.read_bytes() == legacy_launcher and launcher.stat().st_mode & 0o7777 == 0o755
     for action in ('--rollback', '--upgrade'):
         result = install(action)
@@ -346,6 +354,34 @@ runpy.run_path(sys.argv[0], run_name='__main__')
     for name, text in model_notices.items():
         assert (share / 'models' / name).read_text() == text
         assert record['files']['models/' + name] == hashlib.sha256(text.encode()).hexdigest()
+
+    # Updating the service keeps a selected model even after its original directory is gone.
+    selected_record = record
+    retired_ranker = temp / 'retired-ranker'
+    ranker.rename(retired_ranker)
+    default_model = fixture / 'data/models/sentence-model.safetensors'
+    default_model.write_text('new default model\n')
+    result = install('--upgrade')
+    assert result.returncode == 0, result.stderr
+    assert (share / 'models/sentence-model.safetensors').read_text() == 'exported safetensors\n', 'upgrade replaced the selected model'
+    record = json.loads((share / 'installation.json').read_text())
+    assert record['model'] == selected_record['model'], 'retaining a model must retain its original source record'
+    for name, text in model_notices.items():
+        assert (share / 'models' / name).read_text() == text
+        assert record['files']['models/' + name] == selected_record['files']['models/' + name]
+    assert not (share / 'runtime').exists() and not (share / 'models/sentence-model.xml').exists()
+
+    result = install('--upgrade', YANLIU_MODEL_DIR=str(default_model.parent))
+    assert result.returncode == 0, result.stderr
+    assert (share / 'models/sentence-model.safetensors').read_bytes() == default_model.read_bytes()
+    assert json.loads((share / 'installation.json').read_text())['model']['source_path'] == str(default_model)
+    assert all(not (share / 'models' / name).exists() for name in model_notices)
+    result = install('--rollback')
+    assert result.returncode == 0, result.stderr
+    assert (share / 'models/sentence-model.safetensors').read_text() == 'exported safetensors\n'
+    assert json.loads((share / 'installation.json').read_text())['model'] == selected_record['model']
+    assert all((share / 'models' / name).read_text() == text for name, text in model_notices.items())
+    retired_ranker.rename(ranker)
     uninstall()
     config_file.unlink()
     names = ['libopenvino.so.2600', 'libopenvino_intel_gpu_plugin.so', 'libopenvino_intel_npu_plugin.so',
@@ -396,6 +432,9 @@ runpy.run_path(sys.argv[0], run_name='__main__')
     assert json.loads(config_file.read_text()) == {'data_dir': str(share), 'device': 'npu', 'runtime_dir': str(share / 'runtime')}
     npu_config = config_file.read_bytes()
     npu_manifest = (share / 'installation.json').read_bytes()
+    result = install('--upgrade', YANLIU_DEVICE='npu', YANLIU_ACCELERATOR_RUNTIME_DIR=str(runtime))
+    assert result.returncode != 0 and 'gpu/npu need YANLIU_MODEL_DIR' in result.stderr
+    assert (share / 'installation.json').read_bytes() == npu_manifest
     result = install('--rollback')
     assert result.returncode != 0 and 'previous assets do not support configured device npu' in result.stderr
     assert (share / 'installation.json').read_bytes() == npu_manifest

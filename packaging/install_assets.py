@@ -171,7 +171,8 @@ def managed_layout(destination, launcher, component, environment, config_file, s
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     action = parser.add_mutually_exclusive_group()
-    action.add_argument('--upgrade', action='store_true', help='replace a verified installation, retaining the previous version')
+    action.add_argument('--upgrade', action='store_true',
+                        help='upgrade verified assets; CPU keeps the installed model unless YANLIU_MODEL_DIR is set')
     action.add_argument('--rollback', action='store_true', help='swap the verified current and previous asset versions')
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[1]
@@ -194,7 +195,7 @@ def main():
     if not args.rollback and accelerated != ('YANLIU_ACCELERATOR_RUNTIME_DIR' in os.environ):
         raise ValueError('gpu/npu need YANLIU_ACCELERATOR_RUNTIME_DIR; cpu does not use it')
     model_dir = Path(os.environ.get('YANLIU_MODEL_DIR', root / 'data/models'))
-    source_model = model_dir / 'sentence-model.safetensors'
+    preserve_model = args.upgrade and 'YANLIU_MODEL_DIR' not in os.environ
     existing_config = config_file.exists() or config_file.is_symlink()
     settings = None
     if existing_config:
@@ -220,6 +221,9 @@ def main():
     extra = []
     if args.upgrade or args.rollback:
         files = managed_layout(destination, launcher, component, environment, config_file, settings, device)
+        if preserve_model:
+            model_dir = destination / 'models'
+            record = json.loads((destination / 'installation.json').read_text())
         extra = unmanaged(destination, files)
         if previous.exists() or previous.is_symlink():
             if previous.is_symlink() or not previous.is_dir():
@@ -250,10 +254,15 @@ def main():
             (stage / 'models').mkdir()
             shutil.copy2(root / 'target/release/yanliu-ibus', stage / 'bin/yanliu-ibus')
             shutil.copytree(root / 'data/dictionaries', stage / 'dictionaries')
+            source_model = model_dir / 'sentence-model.safetensors'
             shutil.copyfile(source_model, stage / 'models/sentence-model.safetensors')
             for name in ('LICENSE', 'NOTICE', 'README.md', 'provenance.json'):
-                if (model_dir / name).is_file():
-                    shutil.copyfile(model_dir / name, stage / 'models' / name)
+                if preserve_model:
+                    if f'models/{name}' not in files:
+                        continue
+                elif not (model_dir / name).is_file():
+                    continue
+                shutil.copyfile(model_dir / name, stage / 'models' / name)
             shutil.copyfile(root / 'data/THIRD_PARTY.md', stage / 'THIRD_PARTY.md')
             shutil.copyfile(root / 'data/manifest.json', stage / 'source-manifest.json')
             (stage / 'licenses/chinese-ime-lm').mkdir(parents=True)
@@ -264,10 +273,12 @@ def main():
                 copy_accelerator(model_dir,
                                  Path(os.environ['YANLIU_ACCELERATOR_RUNTIME_DIR']), device, stage)
             files = {str(path.relative_to(stage)): digest(path) for path in sorted(stage.rglob('*')) if path.is_file()}
+            if not preserve_model:
+                record = {'format': 'yanliu-install-v1', 'model': {'source_path': str(source_model.resolve()),
+                          'sha256': files['models/sentence-model.safetensors']}}
+            record['files'] = files
             (stage / 'installation.json').write_text(
-                json.dumps({'format': 'yanliu-install-v1', 'model': {'source_path': str(source_model.resolve()),
-                            'sha256': files['models/sentence-model.safetensors']}, 'files': files},
-                           ensure_ascii=False, indent=2) + '\n')
+                json.dumps(record, ensure_ascii=False, indent=2) + '\n')
         if args.upgrade or args.rollback:
             check_unmanaged_conflicts(previous if args.rollback else stage, extra)
             saved_previous = None

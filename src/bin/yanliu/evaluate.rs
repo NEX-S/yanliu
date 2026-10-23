@@ -1,6 +1,6 @@
 //! Candidate checks for JSONL cases; every case stays in the denominator.
 use serde::{Deserialize, Deserializer, Serialize};
-use serde_json::json;
+use serde_json::{Value, json};
 use std::{
     collections::BTreeMap,
     fmt::Display,
@@ -10,7 +10,7 @@ use std::{
     path::Path,
     sync::Arc,
 };
-use yanliu::{CandidateSource, Decoder, Session, model::Model};
+use yanliu::{Candidate, CandidateSource, Decoder, Session, model::Model};
 
 #[derive(Deserialize)]
 struct Case {
@@ -76,6 +76,18 @@ fn rank(session: &Session, golds: &[String]) -> Option<usize> {
         .map(|index| index + 1)
 }
 
+fn candidate_values(candidates: &[Candidate]) -> Vec<Value> {
+    candidates
+        .iter()
+        .map(|candidate| {
+            json!({
+                "text": candidate.text, "consumed": candidate.consumed,
+                "source": format!("{:?}", candidate.source), "score_bits": candidate.score.to_bits(),
+            })
+        })
+        .collect()
+}
+
 pub fn run(
     data: &Path,
     output: &Path,
@@ -107,8 +119,17 @@ pub fn run(
                 .map_err(|error| at(&error))?;
         }
         let static_rank = rank(&session, &case.golds);
+        let mut scoring = None;
         if let Some(model) = &mut model {
-            super::promote(model, &mut session)?;
+            let mut snapshot = session.snapshot();
+            let promotion = model
+                .refine(&mut snapshot, decoder, || true)?
+                .expect("synchronous CLI inference cannot be cancelled");
+            scoring = Some(json!({
+                "candidates": candidate_values(&snapshot.candidates),
+                "promotion": promotion,
+            }));
+            session.apply_candidates(snapshot.revision, snapshot.candidates, promotion.index);
         }
         let rank = rank(&session, &case.golds);
         buckets
@@ -121,24 +142,14 @@ pub fn run(
                 .or_default()
                 .add(static_rank, rank);
         }
-        let candidates: Vec<_> = session
-            .candidates()
-            .iter()
-            .map(|candidate| {
-                json!({
-                    "text": candidate.text, "consumed": candidate.consumed,
-                    "source": format!("{:?}", candidate.source), "score_bits": candidate.score.to_bits(),
-                })
-            })
-            .collect();
+        let candidates = candidate_values(session.candidates());
         let id = if case.id.is_empty() {
             (line + 1).to_string()
         } else {
             case.id
         };
-        rows.push(
-            json!({"id": id, "rank": rank, "static_rank": static_rank, "candidates": candidates}),
-        );
+        rows.push(json!({"id": id, "rank": rank, "static_rank": static_rank,
+                   "candidates": candidates, "scoring": scoring}));
     }
     if rows.is_empty() {
         return Err(format!("{}: no cases", data.display()).into());
