@@ -321,7 +321,12 @@ fn rank_candidates(
     }
     let class = |candidate: &Candidate| {
         if candidate.consumed == input.len() {
-            2
+            if candidate.source != CandidateSource::Completion && !candidate.source.is_correction()
+            {
+                3
+            } else {
+                2
+            }
         } else if candidate.consumed > 0 && input.as_bytes()[candidate.consumed - 1] == b'\'' {
             1
         } else {
@@ -393,6 +398,65 @@ mod cache_tests {
                 (&b.text, b.consumed, b.source.clone(), b.score.to_bits())
             );
         }
+    }
+
+    #[test]
+    fn ordinary_complete_conversions_precede_completion_without_changing_candidates() {
+        let completion = Candidate {
+            text: "你好啊".into(),
+            consumed: 5,
+            source: CandidateSource::Completion,
+            score: 100.0,
+        };
+        let exact = Candidate {
+            text: "你好".into(),
+            consumed: 5,
+            source: CandidateSource::ExactDictionary,
+            score: -100.0,
+        };
+        let composed = Candidate {
+            text: "拟好".into(),
+            consumed: 5,
+            source: CandidateSource::Composed,
+            score: -90.0,
+        };
+        assert_eq!(
+            rank_candidates(
+                "nihao",
+                None,
+                vec![completion.clone(), exact.clone(), composed.clone()]
+            ),
+            [composed, exact, completion]
+        );
+    }
+
+    #[test]
+    fn completion_and_correction_alone_keep_their_score_order() {
+        let completion = Candidate {
+            text: "农业".into(),
+            consumed: 2,
+            source: CandidateSource::Completion,
+            score: 100.0,
+        };
+        let mut correction = Candidate {
+            text: "你".into(),
+            consumed: 2,
+            source: CandidateSource::NeighborSubstitution {
+                at: 1,
+                to: b'i',
+                ends: vec![2],
+            },
+            score: 90.0,
+        };
+        assert_eq!(
+            rank_candidates("no", None, vec![correction.clone(), completion.clone()]),
+            [completion.clone(), correction.clone()]
+        );
+        correction.score = 110.0;
+        assert_eq!(
+            rank_candidates("no", None, vec![completion.clone(), correction.clone()]),
+            [correction, completion]
+        );
     }
 
     #[test]
