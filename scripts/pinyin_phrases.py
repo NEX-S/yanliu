@@ -37,8 +37,9 @@ def load_pinyin_phrases(path):
 
 
 def syllables(text):
-    tokens = list(_tokenizer.cut(text, cut_all=False, HMM=True))
-    values = lazy_pinyin(tokens, style=Style.NORMAL, strict=True, errors=list)
+    # Strings let pypinyin recognize shorter phrases inside a long jieba word.
+    values = [syllable for token in _tokenizer.cut(text, cut_all=False, HMM=True)
+              for syllable in lazy_pinyin(token, style=Style.NORMAL, strict=True, errors=list)]
     if len(values) != len(text):
         raise ValueError("pypinyin did not preserve character alignment")
     return values

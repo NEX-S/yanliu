@@ -115,6 +115,12 @@ class ImeLabTests(unittest.TestCase):
         self.assertEqual(lab.pinyin("的用户", "对不起您拨打"), "deyonghu")
         self.assertEqual(lab.pinyin("就是周末了", "今天是周五，明天"), "jiushizhoumole")
 
+    def test_long_segmented_words_keep_internal_phrase_readings(self):
+        for phrase, expected in (("银行家", "yinhangjia"), ("音乐节", "yinyuejie"),
+                                 ("长江流域", "changjiangliuyu"), ("睡一觉", "shuiyijiao")):
+            with self.subTest(phrase=phrase):
+                self.assertEqual(lab.pinyin(phrase), expected)
+
     def test_phrase_supplement_rejects_invalid_boundary_data(self):
         invalid = ([], {}, {"重构": ["chong", "gou"]}, {"重构": [["chong"]]},
                    {"重构": [["chong", "zhong"], ["gou"]]}, {"重构": [["chong"], [None]]},

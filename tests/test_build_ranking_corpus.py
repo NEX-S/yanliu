@@ -41,6 +41,8 @@ class RankingCorpusTests(unittest.TestCase):
             "乐声": ["yue", "sheng"], "认真地": ["ren", "zhen", "de"],
             "轻轻地": ["qing", "qing", "de"], "系安全带": ["ji", "an", "quan", "dai"],
             "银行": ["yin", "hang"],
+            "银行家": ["yin", "hang", "jia"], "音乐节": ["yin", "yue", "jie"],
+            "长江流域": ["chang", "jiang", "liu", "yu"], "睡一觉": ["shui", "yi", "jiao"],
         }
         readings = {
             **phrases_readings,
