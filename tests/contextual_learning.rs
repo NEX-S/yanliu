@@ -94,12 +94,7 @@ fn refined_session(
         );
     }
     let before = menu(&snapshot.candidates);
-    assert!(session.apply_candidates(
-        snapshot.revision,
-        snapshot.candidates,
-        promotion.index,
-        &promotion.order
-    ));
+    assert!(session.apply_candidates(snapshot.revision, snapshot.candidates, &promotion));
     assert_eq!(
         menu(session.candidates()),
         before,
@@ -272,12 +267,7 @@ fn contextual_choice_preserves_unconfirmed_inputs_and_transfers_to_new_context()
                 .all(|score| score.personal == 0.0 && score.count == 0),
             "unconfirmed input {input} received contextual scores"
         );
-        assert!(session.apply_candidates(
-            snapshot.revision,
-            snapshot.candidates,
-            promotion.index,
-            &promotion.order
-        ));
+        assert!(session.apply_candidates(snapshot.revision, snapshot.candidates, &promotion));
         assert_eq!(session.candidates(), expected, "input={input}");
     }
     assert!(scored_inputs > 0);

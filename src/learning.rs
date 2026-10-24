@@ -231,6 +231,7 @@ impl Learning {
         candidates: &[Candidate],
         selected: usize,
         joined: Option<(&str, &str)>,
+        prior: Option<&[(usize, f32)]>,
     ) -> bool {
         let chosen = &candidates[selected];
         if chosen.source == CandidateSource::Completion {
@@ -242,29 +243,44 @@ impl Learning {
         let rejected: Vec<_> = if self.contextual {
             candidates[..selected]
                 .iter()
-                .filter(|c| {
-                    c.consumed == chosen.consumed
+                .enumerate()
+                .filter_map(|(index, c)| {
+                    (c.consumed == chosen.consumed
                         && c.source != CandidateSource::Completion
-                        && c.source.is_correction() == chosen.source.is_correction()
+                        && c.source.is_correction() == chosen.source.is_correction())
+                    .then_some(index)
                 })
-                .map(|c| features(raw, context, &c.text))
                 .collect()
         } else {
             Vec::new()
         };
-        let change = (!rejected.is_empty()).then(|| {
-            let mut change = vec![0.0; FEATURES];
-            for (index, value) in features(raw, context, &chosen.text) {
-                change[index] += 0.5 * value;
-            }
-            let rate = 0.5 / rejected.len() as f32;
-            for row in rejected {
-                for (index, value) in row {
-                    change[index] -= rate * value;
-                }
-            }
-            change
+        let prior = prior.filter(|prior| {
+            !rejected.is_empty()
+                && chosen.consumed == input.len()
+                && !chosen.source.is_correction()
+                && prior.iter().any(|&(index, _)| index == selected)
+                && rejected
+                    .iter()
+                    .any(|index| prior.iter().any(|(scored, _)| scored == index))
         });
+        let prior_rows: Vec<_> = prior
+            .into_iter()
+            .flatten()
+            .map(|&(index, _)| features(raw, context, &candidates[index].text))
+            .collect();
+        let chosen_features = if prior.is_none() && !rejected.is_empty() {
+            features(raw, context, &chosen.text)
+        } else {
+            Vec::new()
+        };
+        let rejected_rows: Vec<_> = if prior.is_none() {
+            rejected
+                .iter()
+                .map(|&index| features(raw, context, &candidates[index].text))
+                .collect()
+        } else {
+            Vec::new()
+        };
         let mut state = self.lock();
         if state.stopped {
             return false;
@@ -273,6 +289,82 @@ impl Learning {
         if let Some((raw, text)) = joined {
             state.record_count(raw, text);
         }
+        let change = if rejected.is_empty() {
+            None
+        } else if let Some(prior) = prior {
+            let rows = &prior_rows;
+            let selected_row = prior
+                .iter()
+                .position(|&(index, _)| index == selected)
+                .expect("selected candidate has a prior");
+            let personal: Vec<f32> = rows
+                .iter()
+                .map(|row| {
+                    state.adapter.as_ref().map_or(0.0, |adapter| {
+                        row.iter()
+                            .map(|&(index, value)| adapter[index] * value)
+                            .sum()
+                    })
+                })
+                .collect();
+            let counts: Vec<_> = prior
+                .iter()
+                .map(|&(index, _)| {
+                    state
+                        .counts
+                        .get(&(raw.to_owned(), candidates[index].text.clone()))
+                        .copied()
+                        .unwrap_or(0)
+                })
+                .collect();
+            // A recorded full choice participates as a User candidate on the next ranking.
+            let (scores, scale) = crate::model::fuse_scores(
+                candidates,
+                prior,
+                &personal,
+                &counts,
+                &CandidateSource::User,
+                chosen.score,
+            );
+            let (opponent, rival) = scores
+                .iter()
+                .enumerate()
+                .filter(|(_, score)| rejected.contains(&score.index))
+                .max_by(|(_, a), (_, b)| a.total.total_cmp(&b.total))
+                .expect("a rejected candidate has a prior");
+            let mut change = vec![0.0; FEATURES];
+            for &(index, value) in &rows[selected_row] {
+                change[index] += value;
+            }
+            for &(index, value) in &rows[opponent] {
+                change[index] -= value;
+            }
+            let norm: f32 = change.iter().map(|value| value * value).sum();
+            let loss = (crate::model::PROMOTION_MARGIN / scale + rival.total
+                - scores[selected_row].total)
+                .max(0.0);
+            if loss == 0.0 || norm == 0.0 {
+                None
+            } else {
+                let rate = (loss / norm).min(0.5);
+                for value in &mut change {
+                    *value *= rate;
+                }
+                Some(change)
+            }
+        } else {
+            let mut change = vec![0.0; FEATURES];
+            for &(index, value) in &chosen_features {
+                change[index] += 0.5 * value;
+            }
+            let rate = 0.5 / rejected.len() as f32;
+            for row in rejected_rows {
+                for (index, value) in row {
+                    change[index] -= rate * value;
+                }
+            }
+            Some(change)
+        };
         if let Some(change) = change {
             let adapter = state.adapter.get_or_insert_with(|| vec![0.0; FEATURES]);
             for (weight, change) in adapter.iter_mut().zip(change) {
@@ -670,6 +762,67 @@ mod tests {
     }
 
     #[test]
+    fn adaptive_feedback_recomputes_after_count_and_uses_the_strongest_passed_over_candidate() {
+        let learning = Learning::new(true);
+        let mut candidates = [candidate("你", 2), candidate("泥", 2), candidate("拟", 2)];
+        candidates[0].source = CandidateSource::ExactDictionary;
+        for (candidate, score) in candidates.iter_mut().zip([3.0, 2.0, 1.0]) {
+            candidate.score = score;
+        }
+        let prior = [(0, -10.0), (1, -0.2), (2, -2.0)];
+        let old = vec![0.001; FEATURES];
+        learning.lock().adapter = Some(old.clone());
+        let rows: Vec<_> = candidates
+            .iter()
+            .map(|candidate| features("ni", "道路上的", &candidate.text))
+            .collect();
+        let personal = |row: &Vec<(usize, f32)>| {
+            row.iter()
+                .map(|&(index, value)| old[index] * value)
+                .sum::<f32>()
+        };
+        let scale = -2.2_f32 - -10.0;
+        let rival = -2.2 / scale + personal(&rows[1]);
+        let selected = -6.0 / scale + personal(&rows[2]) + 0.15 * 1.0_f32.ln_1p();
+        let mut direction = vec![0.0; FEATURES];
+        for &(index, value) in &rows[2] {
+            direction[index] += value;
+        }
+        for &(index, value) in &rows[1] {
+            direction[index] -= value;
+        }
+        let norm: f32 = direction.iter().map(|value| value * value).sum();
+        let rate = ((crate::model::PROMOTION_MARGIN / scale + rival - selected) / norm).min(0.5);
+        assert!(rate > 0.0 && rate < 0.5);
+        assert!(learning.record_choice("ni", "道路上的", &candidates, 2, None, Some(&prior)));
+        let state = learning.lock();
+        assert_eq!(state.counts.get(&("ni".into(), "拟".into())), Some(&1));
+        assert_eq!(state.updates, 1);
+        for ((&actual, old), direction) in state
+            .adapter
+            .as_ref()
+            .unwrap()
+            .iter()
+            .zip(old)
+            .zip(direction)
+        {
+            assert!((actual - (old + rate * direction)).abs() < 1e-7);
+        }
+    }
+
+    #[test]
+    fn an_already_satisfied_post_count_margin_does_not_invent_an_update() {
+        let learning = Learning::new(true);
+        let candidates = [candidate("你", 2), candidate("泥", 2), candidate("拟", 2)];
+        let prior = [(0, -1.0), (1, -1.2), (2, -20.0)];
+        assert!(learning.record_choice("ni", "道路上的", &candidates, 1, None, Some(&prior)));
+        let state = learning.lock();
+        assert_eq!(state.counts.get(&("ni".into(), "泥".into())), Some(&1));
+        assert_eq!(state.updates, 0);
+        assert!(state.adapter.is_none());
+    }
+
+    #[test]
     fn features_preserve_condition_and_ascii_identity() {
         let reference = features("Rust", "编程语言", "Rust");
         for alternative in [
@@ -708,12 +861,12 @@ mod tests {
         assert!(
             writer
                 .learning
-                .record_choice("xian", "我去", &menu, 1, None)
+                .record_choice("xian", "我去", &menu, 1, None, None)
         );
         assert!(
             writer
                 .learning
-                .record_choice("xian", "此时此刻", &reversed, 1, None)
+                .record_choice("xian", "此时此刻", &reversed, 1, None, None)
         );
         let travel = writer.learning.personal_scores("xian", "我去", &menu);
         let now = writer.learning.personal_scores("xian", "此时此刻", &menu);
@@ -757,7 +910,7 @@ mod tests {
         assert!(
             writer
                 .learning
-                .record_choice("xian", "我去", &menu, 1, None)
+                .record_choice("xian", "我去", &menu, 1, None, None)
         );
         writer.finish().unwrap();
         let summary = list(&dir).unwrap();
@@ -774,7 +927,7 @@ mod tests {
     fn contextual_scores_require_the_confirmed_raw_input_but_not_the_chosen_text() {
         let learning = Learning::new(true);
         let menu = [candidate("现", 4), candidate("西安", 4)];
-        assert!(learning.record_choice("xian", "我去", &menu, 1, None));
+        assert!(learning.record_choice("xian", "我去", &menu, 1, None, None));
         let transferred = learning.personal_scores("xian", "乘火车前往", &menu);
         assert!(transferred[1] > transferred[0], "{transferred:?}");
 
@@ -813,13 +966,13 @@ mod tests {
             candidate("你", 3),
             candidate("泥", 3),
         ];
-        assert!(learning.record_choice("ni'hao", "外部前文", &menu, 3, None));
+        assert!(learning.record_choice("ni'hao", "外部前文", &menu, 3, None, None));
         assert_eq!(learning.lock().updates, 0);
         assert_eq!(count(&learning, "ni'", "你"), Some(1));
         assert!(learning.lock().adapter.is_none());
-        assert!(learning.record_choice("ni'hao", "外部前文", &menu, 4, None));
+        assert!(learning.record_choice("ni'hao", "外部前文", &menu, 4, None, None));
         assert_eq!(learning.lock().updates, 1);
-        assert!(learning.record_choice("ni'hao", "外部前文", &menu, 0, None));
+        assert!(learning.record_choice("ni'hao", "外部前文", &menu, 0, None, None));
         assert_eq!(learning.lock().updates, 1);
         assert_eq!(learning.revision(), 2);
     }
@@ -829,8 +982,8 @@ mod tests {
         let ordinary = Learning::new(true);
         let joined = Learning::new(true);
         let menu = [candidate("号", 3), candidate("好", 3)];
-        assert!(ordinary.record_choice("hao", "你", &menu, 1, None));
-        assert!(joined.record_choice("hao", "你", &menu, 1, Some(("nihao", "你好"))));
+        assert!(ordinary.record_choice("hao", "你", &menu, 1, None, None));
+        assert!(joined.record_choice("hao", "你", &menu, 1, Some(("nihao", "你好")), None));
         let a = ordinary.lock();
         let b = joined.lock();
         assert_eq!(a.adapter, b.adapter);
@@ -987,7 +1140,7 @@ mod tests {
         assert!(
             writer
                 .learning
-                .record_choice("ni", "", &[candidate("你", 2)], 0, None)
+                .record_choice("ni", "", &[candidate("你", 2)], 0, None, None)
         );
         let error = clear(&dir).unwrap_err().to_string();
         assert!(error.contains("stop yanliu-ibus and retry"), "{error}");
@@ -1011,7 +1164,7 @@ mod tests {
         assert!(
             writer
                 .learning
-                .record_choice("ni", "", &[candidate("泥", 2)], 0, None)
+                .record_choice("ni", "", &[candidate("泥", 2)], 0, None, None)
         );
         writer.finish().unwrap();
         assert_eq!(list(&dir).unwrap()["rows"][0]["text"], "泥");
@@ -1053,7 +1206,7 @@ mod tests {
         assert!(
             writer
                 .learning
-                .record_choice("ni", "", &[candidate("你", 2)], 0, None)
+                .record_choice("ni", "", &[candidate("你", 2)], 0, None, None)
         );
         writer.finish().unwrap();
         let previous = fs::read(&path).unwrap();
@@ -1068,7 +1221,7 @@ mod tests {
         assert!(
             writer
                 .learning
-                .record_choice("ni", "", &[candidate("泥", 2)], 0, None)
+                .record_choice("ni", "", &[candidate("泥", 2)], 0, None, None)
         );
         let cause = rx.recv_timeout(Duration::from_secs(2)).unwrap();
         assert!(
@@ -1079,7 +1232,7 @@ mod tests {
         assert!(
             !writer
                 .learning
-                .record_choice("ni", "", &[candidate("泥", 2)], 0, None)
+                .record_choice("ni", "", &[candidate("泥", 2)], 0, None, None)
         );
         assert!(writer.finish().is_err());
         assert_eq!(fs::read(&path).unwrap(), previous);
@@ -1145,8 +1298,9 @@ mod tests {
     #[test]
     fn bounded_table_evicts_deterministically_and_saturates_counts() {
         let learning = Learning::new(false);
-        let choose =
-            |text: &str| assert!(learning.record_choice("ni", "", &[candidate(text, 2)], 0, None));
+        let choose = |text: &str| {
+            assert!(learning.record_choice("ni", "", &[candidate(text, 2)], 0, None, None))
+        };
         for index in 0..MAX_ROWS {
             choose(&format!("词{index:04}"));
         }
@@ -1170,11 +1324,11 @@ mod tests {
         for index in 0..16 {
             let text = format!("词{index:02}");
             for _ in 0..index + 1 {
-                assert!(learning.record_choice("ni", "", &[candidate(&text, 2)], 0, None));
+                assert!(learning.record_choice("ni", "", &[candidate(&text, 2)], 0, None, None));
             }
         }
-        assert!(learning.record_choice("ni'", "", &[candidate("边界", 3)], 0, None));
-        assert!(learning.record_choice("ni'hao", "", &[candidate("完整", 6)], 0, None));
+        assert!(learning.record_choice("ni'", "", &[candidate("边界", 3)], 0, None, None));
+        assert!(learning.record_choice("ni'hao", "", &[candidate("完整", 6)], 0, None, None));
         let recalled = learning.recall("ni'hao", &[]);
         assert_eq!(recalled.len(), RECALL_LIMIT);
         assert_eq!(recalled[0].text, "完整");

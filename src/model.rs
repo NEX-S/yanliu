@@ -32,6 +32,8 @@ pub struct Promotion {
     /// Original scoring-menu indices in descending total-score order.
     pub order: Vec<usize>,
     pub scores: Vec<CandidateScore>,
+    #[serde(skip)]
+    pub(crate) feedback: bool,
 }
 
 enum Backend {
@@ -159,19 +161,20 @@ impl Model {
                 index: None,
                 order: Vec::new(),
                 scores: Vec::new(),
+                feedback: false,
             });
         }
         let considered_candidates = || considered.iter().map(|&i| &candidates[i]);
         let texts: Vec<&str> = considered_candidates().map(|c| c.text.as_str()).collect();
         // A bare initial has no syllable evidence for a public language-model prior.
         // Personal learning also keeps the existing no-context leader protection.
-        let language = if single_initial(input)
+        let (language, all_known) = if single_initial(input)
             || (context.is_empty()
                 && matches!(
                     candidates[0].source,
                     CandidateSource::ExactDictionary | CandidateSource::User
                 )) {
-            vec![0.0; texts.len()]
+            (vec![0.0; texts.len()], false)
         } else {
             self.language_scores(
                 context,
@@ -179,64 +182,34 @@ impl Model {
                 candidates[0].source == CandidateSource::Composed,
             )?
         };
-        let dictionary_prior = matches!(
-            candidates[0].source,
-            CandidateSource::ExactDictionary | CandidateSource::User
-        );
-        let mut scores: Vec<_> = considered
-            .iter()
-            .zip(language)
-            .map(|(&index, language)| {
-                // Composed beam scores contain segmentation costs, not word-frequency evidence.
-                let dictionary = if dictionary_prior {
-                    -STATIC_GAP_PENALTY * (candidates[0].score - candidates[index].score).max(0.0)
-                } else {
-                    0.0
-                };
-                CandidateScore {
-                    index,
-                    language,
-                    dictionary,
-                    personal: 0.0,
-                    count: 0,
-                    frequency: 0.0,
-                    total: 0.0,
-                }
-            })
-            .collect();
-        if let Some(learning) = personal {
-            let personal = learning.personal_scores(input, context, considered_candidates());
-            let counts = learning.counts(input, considered_candidates());
-            for ((score, personal), count) in scores.iter_mut().zip(personal).zip(counts) {
-                score.personal = personal;
-                score.count = count;
-                score.frequency = 0.15 * (count as f32).ln_1p();
-            }
-        }
-        // A larger LM can produce much wider likelihood gaps for the same alternatives.
-        // Personal updates use fixed feature units, so compare them to a bounded prior range.
-        // Scaling its margin too preserves the base decision before personal feedback exists.
-        let prior_scale = if scores
-            .iter()
-            .any(|score| score.personal != 0.0 || score.count > 0)
-        {
-            let low = scores
-                .iter()
-                .map(|score| score.language + score.dictionary)
-                .fold(f32::INFINITY, f32::min);
-            let high = scores
-                .iter()
-                .map(|score| score.language + score.dictionary)
-                .fold(f32::NEG_INFINITY, f32::max);
-            (high - low).max(1.0)
-        } else {
-            1.0
+        let language: Vec<_> = considered.iter().copied().zip(language).collect();
+        let feedback = personal.is_some()
+            && all_known
+            && language.iter().any(|&(_, score)| score != 0.0)
+            && matches!(
+                candidates[0].source,
+                CandidateSource::ExactDictionary | CandidateSource::User
+            )
+            && considered_candidates().all(|candidate| {
+                answers_input(input, candidate)
+                    && candidate.source != CandidateSource::Completion
+                    && !candidate.source.is_correction()
+            });
+        let (personal, counts) = match personal {
+            Some(learning) => (
+                learning.personal_scores(input, context, considered_candidates()),
+                learning.counts(input, considered_candidates()),
+            ),
+            None => (vec![0.0; considered.len()], vec![0; considered.len()]),
         };
-        for score in &mut scores {
-            score.total = (score.language + score.dictionary) / prior_scale
-                + score.personal
-                + score.frequency;
-        }
+        let (scores, prior_scale) = fuse_scores(
+            candidates,
+            &language,
+            &personal,
+            &counts,
+            &candidates[0].source,
+            candidates[0].score,
+        );
         let margin = PROMOTION_MARGIN / prior_scale;
         Ok(Promotion {
             index: best_promotion(&scores, margin),
@@ -244,6 +217,7 @@ impl Model {
             prior_scale,
             margin,
             scores,
+            feedback,
         })
     }
 
@@ -252,7 +226,7 @@ impl Model {
         context: &str,
         texts: &[&str],
         composed_leader: bool,
-    ) -> Result<Vec<f32>> {
+    ) -> Result<(Vec<f32>, bool)> {
         let window = match &self.backend {
             Backend::Cpu(reranker) => reranker.model().context_length(),
             #[cfg(feature = "accelerator")]
@@ -264,7 +238,7 @@ impl Model {
         if texts.iter().any(|text| {
             text.chars().count() >= window || text.bytes().any(|b| b.is_ascii_alphabetic())
         }) {
-            return Ok(vec![0.0; texts.len()]);
+            return Ok((vec![0.0; texts.len()], false));
         }
         let known: Vec<_> = texts
             .iter()
@@ -282,7 +256,7 @@ impl Model {
         // UNK describes every missing character together, not the specific candidate. Without
         // a representable leader there is no comparable language prior for a promotion.
         if known.first() != Some(&0) || known.len() < 2 {
-            return Ok(vec![0.0; texts.len()]);
+            return Ok((vec![0.0; texts.len()], false));
         }
         let known_texts: Vec<_> = known.iter().map(|&index| texts[index]).collect();
         let known_scores = match &mut self.backend {
@@ -297,6 +271,7 @@ impl Model {
         // evidence and explicit personal choices still apply to it.
         let mut scores = vec![known_scores[0]; texts.len()];
         let leader_length = texts[0].chars().count() as f32;
+        let all_known = known.len() == texts.len();
         for (&index, score) in known.iter().zip(known_scores) {
             // A shared denominator keeps extra segmentation from diluting its token costs.
             scores[index] = if composed_leader {
@@ -305,11 +280,90 @@ impl Model {
                 score
             };
         }
-        Ok(scores)
+        Ok((scores, all_known))
     }
 }
 
-const PROMOTION_MARGIN: f32 = 0.25;
+pub(crate) fn fuse_scores(
+    candidates: &[Candidate],
+    language: &[(usize, f32)],
+    personal: &[f32],
+    counts: &[u32],
+    leader_source: &CandidateSource,
+    leader_score: f32,
+) -> (Vec<CandidateScore>, f32) {
+    let dictionary_prior = matches!(
+        leader_source,
+        CandidateSource::ExactDictionary | CandidateSource::User
+    );
+    // Neutral language evidence must preserve explicit choices. A scored User leader
+    // must not flatten static gaps merely because personal ordering moved it first.
+    let reference = if *leader_source == CandidateSource::User
+        && language.iter().any(|&(_, score)| score != 0.0)
+    {
+        language
+            .iter()
+            .map(|&(index, _)| candidates[index].score)
+            .fold(leader_score, f32::max)
+    } else {
+        leader_score
+    };
+    let mut scores: Vec<_> = language
+        .iter()
+        .zip(personal)
+        .zip(counts)
+        .map(|((&(index, language), &personal), &count)| CandidateScore {
+            index,
+            language,
+            personal,
+            count,
+            dictionary: if dictionary_prior {
+                -STATIC_GAP_PENALTY * (reference - candidates[index].score).max(0.0)
+            } else {
+                0.0
+            },
+            frequency: 0.15 * (count as f32).ln_1p(),
+            total: 0.0,
+        })
+        .collect();
+    let prior_scale = if scores
+        .iter()
+        .any(|score| score.personal != 0.0 || score.count > 0)
+    {
+        let low = scores
+            .iter()
+            .map(|score| score.language + score.dictionary)
+            .fold(f32::INFINITY, f32::min);
+        let high = scores
+            .iter()
+            .map(|score| score.language + score.dictionary)
+            .fold(f32::NEG_INFINITY, f32::max);
+        (high - low).max(1.0)
+    } else {
+        1.0
+    };
+    for score in &mut scores {
+        score.total =
+            (score.language + score.dictionary) / prior_scale + score.personal + score.frequency;
+    }
+    (scores, prior_scale)
+}
+
+#[cfg(test)]
+impl Promotion {
+    pub(crate) fn for_test(index: Option<usize>, order: &[usize]) -> Self {
+        Self {
+            prior_scale: 1.0,
+            margin: PROMOTION_MARGIN,
+            index,
+            order: order.to_vec(),
+            scores: Vec::new(),
+            feedback: false,
+        }
+    }
+}
+
+pub(crate) const PROMOTION_MARGIN: f32 = 0.25;
 const STATIC_GAP_PENALTY: f32 = 2.0;
 
 fn best_promotion(scores: &[CandidateScore], margin: f32) -> Option<usize> {
@@ -475,7 +529,8 @@ mod tests {
         ];
         let raw = model
             .language_scores("我去", &["现", "西安"], false)
-            .unwrap();
+            .unwrap()
+            .0;
         assert!(raw[1] > raw[0] + PROMOTION_MARGIN);
         let result = model
             .score_candidates(&snapshot("xian", "我去", &candidates), &[])
@@ -489,6 +544,67 @@ mod tests {
             .unwrap();
         assert_eq!(result.scores[1].language, raw[1]);
         assert_eq!(result.scores[1].dictionary, -1.0);
+    }
+
+    #[test]
+    fn user_leader_preserves_dictionary_gaps_between_considered_candidates() {
+        let mut model = model();
+        let candidates = [
+            candidate("你", 2, CandidateSource::ExactDictionary),
+            candidate("泥", 2, CandidateSource::ExactDictionary),
+            candidate("拟", 2, CandidateSource::ExactDictionary),
+        ];
+        let mut session = snapshot("ni", "道路上的", &candidates);
+        session.learning = Some(Arc::new(Learning::new(true)));
+        for (candidate, score) in session.candidates.iter_mut().zip([3.0, 2.0, 1.0]) {
+            candidate.score = score;
+        }
+        let before = model.score_candidates(&session, &[]).unwrap();
+        assert!(before.scores.iter().any(|score| score.language != 0.0));
+        assert!(before.scores[0].dictionary > before.scores[1].dictionary);
+        let expected: Vec<_> = before
+            .scores
+            .iter()
+            .map(|score| {
+                (
+                    session.candidates[score.index].text.clone(),
+                    score.dictionary.to_bits(),
+                )
+            })
+            .collect();
+        session.candidates.rotate_right(1);
+        session.candidates[0].source = CandidateSource::User;
+        let after = model.score_candidates(&session, &[]).unwrap();
+        for (text, dictionary) in expected {
+            let actual = after
+                .scores
+                .iter()
+                .find(|score| session.candidates[score.index].text == text)
+                .unwrap();
+            assert_eq!(actual.dictionary.to_bits(), dictionary, "{text}");
+        }
+    }
+
+    #[test]
+    fn adaptive_feedback_requires_a_known_language_group_and_a_dictionary_leader() {
+        let candidates = [
+            candidate("你", 2, CandidateSource::ExactDictionary),
+            candidate("泥", 2, CandidateSource::Composed),
+        ];
+        let mut session = snapshot("ni", "道路上的", &candidates);
+        session.learning = Some(Arc::new(Learning::new(true)));
+        let mut model = model();
+        assert!(model.score_candidates(&session, &[]).unwrap().feedback);
+        session.candidates[0].source = CandidateSource::Composed;
+        assert!(!model.score_candidates(&session, &[]).unwrap().feedback);
+        session.candidates[0].source = CandidateSource::ExactDictionary;
+        for text in ["B站", "㨎"] {
+            session.candidates[1].text = text.into();
+            assert!(!model.score_candidates(&session, &[]).unwrap().feedback);
+        }
+        session.candidates[1].text = "泥".into();
+        session.context.clear();
+        assert!(!model.score_candidates(&session, &[]).unwrap().feedback);
     }
 
     #[test]
@@ -524,8 +640,7 @@ mod tests {
         assert!(session.apply_candidates(
             snapshot.revision,
             snapshot.candidates,
-            Some(index),
-            &decision.order
+            &crate::model::Promotion::for_test(Some(index), &decision.order)
         ));
         assert_eq!(session.candidates()[0].text, "西安");
     }
@@ -551,12 +666,7 @@ mod tests {
                     .refine(&mut snapshot, &decoder, || true)
                     .unwrap()
                     .unwrap();
-                assert!(session.apply_candidates(
-                    snapshot.revision,
-                    snapshot.candidates,
-                    result.index,
-                    &result.order
-                ));
+                assert!(session.apply_candidates(snapshot.revision, snapshot.candidates, &result));
                 assert_eq!(session.candidates()[0].text, "开源");
             }
         }
@@ -590,12 +700,7 @@ mod tests {
             .refine(&mut snapshot, &decoder, || true)
             .unwrap()
             .unwrap();
-        assert!(session.apply_candidates(
-            snapshot.revision,
-            snapshot.candidates,
-            result.index,
-            &result.order
-        ));
+        assert!(session.apply_candidates(snapshot.revision, snapshot.candidates, &result));
         assert_eq!(session.candidates()[0].text, "B站");
         assert_eq!(session.candidates()[0].source, CandidateSource::User);
     }
@@ -689,6 +794,7 @@ mod tests {
             model
                 .language_scores("我马上", &["了", "来"], false)
                 .unwrap()
+                .0
                 .iter()
                 .all(|s| *s < 0.0)
         );
@@ -742,20 +848,23 @@ mod tests {
         assert_eq!(
             model
                 .language_scores("视频", &["避战", "必占", "B站"], false)
-                .unwrap(),
+                .unwrap()
+                .0,
             vec![0.0; 3]
         );
         let long = "字".repeat(342);
         assert_eq!(
             model
                 .language_scores("前文", &[&long, "你"], false)
-                .unwrap(),
+                .unwrap()
+                .0,
             vec![0.0; 2]
         );
         assert!(
             model
                 .language_scores("视频", &["避战", "必占"], false)
                 .unwrap()
+                .0
                 .iter()
                 .all(|score| *score < 0.0)
         );
@@ -787,10 +896,11 @@ mod tests {
         for character in ['㨎', '𠮷'] {
             assert!(!sentence_model.contains_character(character));
         }
-        let known = model.language_scores("出", &["如", "入"], false).unwrap();
+        let known = model.language_scores("出", &["如", "入"], false).unwrap().0;
         let mixed = model
             .language_scores("出", &["如", "㨎", "入"], false)
-            .unwrap();
+            .unwrap()
+            .0;
         assert_eq!(mixed, vec![known[0], known[0], known[1]]);
         assert!(
             known[1] > known[0],
@@ -799,12 +909,14 @@ mod tests {
         assert_eq!(
             model
                 .language_scores("出", &["㨎", "如", "入"], false)
-                .unwrap(),
+                .unwrap()
+                .0,
             vec![0.0; 3]
         );
         let scores = model
             .language_scores("好", &["对", "㨎", "𠮷"], false)
-            .unwrap();
+            .unwrap()
+            .0;
         assert_eq!(scores, vec![0.0; 3]);
     }
 
@@ -819,7 +931,8 @@ mod tests {
         };
         let scores = model
             .language_scores("可以借用一下洗", &texts, true)
-            .unwrap();
+            .unwrap()
+            .0;
         assert_eq!(scores[0], raw[0]);
         assert_eq!(scores[1], raw[1] * (4.0 / 3.0));
         assert_eq!(scores[2], raw[2] * (1.0 / 3.0));
@@ -877,12 +990,7 @@ mod tests {
             .refine(&mut snapshot, &decoder, || true)
             .unwrap()
             .unwrap();
-        assert!(session.apply_candidates(
-            snapshot.revision,
-            snapshot.candidates,
-            result.index,
-            &result.order
-        ));
+        assert!(session.apply_candidates(snapshot.revision, snapshot.candidates, &result));
         assert_eq!(session.candidates()[0].text, "㨎");
         assert_eq!(session.candidates()[0].source, CandidateSource::User);
     }

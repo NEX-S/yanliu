@@ -69,7 +69,7 @@ python3 scripts/fetch_assets.py
 
 明确选过的词会记在本机；同一串拼音连续分段选完后，也会记住完整输入和组合文本。即使后来未出现在词库候选中，也可从个人记录中召回。学习记录可以查看、清除或关闭；密码等敏感字段直接透传，不参与学习。完整按键和配置见[使用手册](docs/USER-GUIDE.md)。
 
-开启语境学习后，个人上下文偏好只调整明确选过的原始拼音，同一拼音可以适应不同前文；其他拼音继续使用基础模型。
+开启语境学习后，个人上下文偏好只调整明确选过的原始拼音，同一拼音可以适应不同前文；其他拼音继续使用基础模型。有可靠的模型评分时，学习会根据候选分差控制更新力度，减少一次纠正对其他语境的影响。
 
 <details>
 <summary>在终端查看候选</summary>
@@ -127,6 +127,7 @@ flowchart LR
     subgraph Core["Rust 输入核心"]
         Session["Session<br/>输入与会话"] --> Decoder["decoder<br/>切分与召回"]
         Session --> Model["model<br/>候选排序"]
+        Model -->|候选顺序与评分| Session
         Model -->|拼音约束搜索| Decoder
         Session --> Learning["Learning<br/>个人偏好"]
         Model --> Learning

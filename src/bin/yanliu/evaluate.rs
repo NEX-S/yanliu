@@ -129,12 +129,7 @@ pub fn run(
                 "candidates": candidate_values(&snapshot.candidates),
                 "promotion": promotion,
             }));
-            session.apply_candidates(
-                snapshot.revision,
-                snapshot.candidates,
-                promotion.index,
-                &promotion.order,
-            );
+            session.apply_candidates(snapshot.revision, snapshot.candidates, &promotion);
         }
         let rank = rank(&session, &case.golds);
         buckets

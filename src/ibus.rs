@@ -1,6 +1,8 @@
 //! The GNOME IBus boundary. Candidate windows are owned by GNOME Shell.
 use crate::{
-    Candidate, CandidateSource, Decoder, Session, learning::Learning, model::Model,
+    Candidate, CandidateSource, Decoder, Session,
+    learning::Learning,
+    model::{Model, Promotion},
     session::SessionSnapshot,
 };
 use std::{
@@ -179,7 +181,7 @@ impl RankJob {
     fn current(&self) -> bool {
         self.generation.load(Ordering::Acquire) == self.serial
     }
-    async fn publish(self, preferred: Option<usize>, order: &[usize]) -> zbus::Result<()> {
+    async fn publish(self, promotion: &Promotion) -> zbus::Result<()> {
         let server = self.emitter.connection().object_server();
         // Only Destroy removes an engine, and it made this job stale first.
         let interface = match server.interface::<_, Engine>(self.emitter.path()).await {
@@ -188,22 +190,23 @@ impl RankJob {
             Err(error) => return Err(error),
         };
         let mut engine = interface.get_mut().await;
-        if self.current()
-            && (preferred.is_some()
-                || !order
+        if self.current() {
+            let changed = promotion.index.is_some()
+                || !promotion
+                    .order
                     .iter()
                     .copied()
                     .filter(|&index| index != 0)
                     .is_sorted()
-                || self.snapshot.candidates != engine.session.candidates())
-            && engine.session.apply_candidates(
+                || self.snapshot.candidates != engine.session.candidates();
+            if engine.session.apply_candidates(
                 self.snapshot.revision,
                 self.snapshot.candidates,
-                preferred,
-                order,
-            )
-        {
-            engine.publish(&self.emitter).await?;
+                promotion,
+            ) && changed
+            {
+                engine.publish(&self.emitter).await?;
+            }
         }
         Ok(())
     }
@@ -291,9 +294,7 @@ impl RankingWorker {
                             Err(error) => return Err(format!("ranking inference failed: {error}")),
                         };
                         let path = job.emitter.path().to_owned();
-                        if let Err(error) =
-                            runtime.block_on(job.publish(promotion.index, &promotion.order))
-                        {
+                        if let Err(error) = runtime.block_on(job.publish(&promotion)) {
                             return Err(format!("ranking publisher at {path}: {error}"));
                         }
                     }
@@ -1383,13 +1384,19 @@ mod tests {
             serial: unchanged.serial,
             snapshot: engine.get().await.session.snapshot(),
         };
-        unchanged.publish(None, &[1, 0, 2]).await.unwrap();
+        unchanged
+            .publish(&Promotion::for_test(None, &[1, 0, 2]))
+            .await
+            .unwrap();
         assert!(
             barrier(&mut signals, engine.signal_emitter())
                 .await
                 .is_empty()
         );
-        changed.publish(None, &[0, 2, 1]).await.unwrap();
+        changed
+            .publish(&Promotion::for_test(None, &[0, 2, 1]))
+            .await
+            .unwrap();
         let updates = barrier(&mut signals, engine.signal_emitter()).await;
         assert!(
             updates
@@ -1401,6 +1408,53 @@ mod tests {
         assert_eq!(engine.get().await.session.candidates(), expected);
         assert!(key(&proxy, b'2'.into()).await);
         assert_eq!(committed(&mut signals).await, "拟");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn unchanged_ranking_keeps_feedback_without_republishing_the_menu() {
+        let bus = TestBus::new().await;
+        let queue = Arc::default();
+        let learning = Arc::new(Learning::new(true));
+        let mut session = Session::new(
+            decoder("...\n你\tni\t100\n泥\tni\t90\n拟\tni\t80\n"),
+            Some(learning.clone()),
+        );
+        session.set_context("道路上的");
+        let (proxy, engine) = bus.engine(&queue, 1, session).await;
+        let mut signals = proxy.receive_all_signals().await.unwrap();
+        type_text(&proxy, "ni").await;
+        barrier(&mut signals, engine.signal_emitter()).await;
+        let candidates = engine.get().await.session.candidates().to_vec();
+        let mut promotion = Promotion::for_test(None, &[0, 1, 2]);
+        promotion.feedback = true;
+        promotion.scores = [-1.0, -1.2, -20.0]
+            .into_iter()
+            .enumerate()
+            .map(|(index, language)| crate::model::CandidateScore {
+                index,
+                language,
+                dictionary: 0.0,
+                personal: 0.0,
+                count: 0,
+                frequency: 0.0,
+                total: 0.0,
+            })
+            .collect();
+        take_job(&queue).publish(&promotion).await.unwrap();
+        assert!(
+            barrier(&mut signals, engine.signal_emitter())
+                .await
+                .is_empty()
+        );
+        assert!(key(&proxy, b'2'.into()).await);
+        assert_eq!(committed(&mut signals).await, "泥");
+        let mut counts = vec![0; candidates.len()];
+        counts[1] = 1;
+        assert_eq!(learning.counts("ni", &candidates), counts);
+        assert_eq!(
+            learning.personal_scores("ni", "道路上的", &candidates),
+            vec![0.0; candidates.len()]
+        );
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1424,10 +1478,16 @@ mod tests {
         );
         // The stale "n" job publishes nothing; the "ni" job promotes a full
         // conversion and leaves the partial completion in place.
-        stale.publish(Some(1), &[]).await.unwrap();
+        stale
+            .publish(&Promotion::for_test(Some(1), &[]))
+            .await
+            .unwrap();
         let current = take_job(&queue);
         assert_eq!(current.snapshot.input, "ni");
-        current.publish(Some(1), &[]).await.unwrap();
+        current
+            .publish(&Promotion::for_test(Some(1), &[]))
+            .await
+            .unwrap();
         assert_eq!(auxiliary(&mut signals).await, ("ni▏".into(), true));
         expected[..=1].rotate_right(1);
         assert_eq!(engine.get().await.session.candidates(), expected);
@@ -1527,7 +1587,10 @@ mod tests {
         let shown = engine.get().await.session.candidates().to_vec();
         assert!(key(&proxy, KEYSYM_DOWN).await);
         assert!(wait_lookup(&mut signals).await);
-        pending.publish(Some(1), &[]).await.unwrap();
+        pending
+            .publish(&Promotion::for_test(Some(1), &[]))
+            .await
+            .unwrap();
         {
             let engine = engine.get().await;
             assert_eq!(engine.cursor, 1);
@@ -1597,8 +1660,14 @@ mod tests {
                 assert!(rows.iter().eq(shown.iter().map(|c| &c.text)));
             }
             // The in-flight "n" job and the queued "ni" job are both stale.
-            first.publish(Some(1), &[]).await.unwrap();
-            take_job(&queue).publish(Some(1), &[]).await.unwrap();
+            first
+                .publish(&Promotion::for_test(Some(1), &[]))
+                .await
+                .unwrap();
+            take_job(&queue)
+                .publish(&Promotion::for_test(Some(1), &[]))
+                .await
+                .unwrap();
             {
                 let engine = engine.get().await;
                 assert_eq!(engine.cursor, final_page * PAGE_SIZE);
@@ -1812,7 +1881,10 @@ mod tests {
                 .await;
             let mut signals = proxy.receive_all_signals().await.unwrap();
             type_text(&proxy, "ni").await;
-            take_job(&queue).publish(Some(1), &[]).await.unwrap();
+            take_job(&queue)
+                .publish(&Promotion::for_test(Some(1), &[]))
+                .await
+                .unwrap();
             assert!(key(&proxy, KEYSYM_DOWN).await);
             let shown = barrier(&mut signals, engine.signal_emitter()).await;
             let before = engine.get().await.session.snapshot();
@@ -1837,8 +1909,7 @@ mod tests {
                 assert!(!engine.get_mut().await.session.apply_candidates(
                     before.revision,
                     before.candidates,
-                    Some(1),
-                    &[]
+                    &crate::model::Promotion::for_test(Some(1), &[])
                 ));
                 Some(take_job(&queue))
             } else {
@@ -1874,7 +1945,10 @@ mod tests {
             }
             assert_eq!(committed(&mut signals).await, expected);
             if let Some(pending) = pending {
-                pending.publish(Some(1), &[]).await.unwrap();
+                pending
+                    .publish(&Promotion::for_test(Some(1), &[]))
+                    .await
+                    .unwrap();
                 assert!(
                     barrier(&mut signals, engine.signal_emitter())
                         .await
@@ -1910,7 +1984,10 @@ mod tests {
             assert!(engine.session.context().is_empty());
         }
         assert_eq!(learning.revision(), 0);
-        pending.publish(Some(1), &[]).await.unwrap();
+        pending
+            .publish(&Promotion::for_test(Some(1), &[]))
+            .await
+            .unwrap();
         let late = barrier(&mut signals, engine.signal_emitter()).await;
         assert!(late.is_empty(), "late ranking restored English composition");
     }
@@ -2025,7 +2102,10 @@ mod tests {
                     assert!(!wait_lookup(&mut signals).await);
                 }
             }
-            pending.publish(Some(1), &[]).await.unwrap();
+            pending
+                .publish(&Promotion::for_test(Some(1), &[]))
+                .await
+                .unwrap();
             let late = barrier(&mut signals, engine.signal_emitter()).await;
             assert!(late.is_empty(), "late ranking after {action}");
         }
@@ -2099,12 +2179,7 @@ mod tests {
             .refine(&mut snapshot, &decoder, || true)
             .unwrap()
             .unwrap();
-        assert!(expected.apply_candidates(
-            snapshot.revision,
-            snapshot.candidates,
-            promotion.index,
-            &promotion.order
-        ));
+        assert!(expected.apply_candidates(snapshot.revision, snapshot.candidates, &promotion));
         assert_eq!(expected.candidates()[0].text, "西安");
         let mut session = Session::new(decoder, Some(learning));
         session.set_context("我去");

@@ -38,12 +38,7 @@ fn refine(
     let explanation = model
         .refine(&mut snapshot, decoder, || true)?
         .expect("synchronous CLI inference cannot be cancelled");
-    session.apply_candidates(
-        snapshot.revision,
-        snapshot.candidates.clone(),
-        explanation.index,
-        &explanation.order,
-    );
+    session.apply_candidates(snapshot.revision, snapshot.candidates.clone(), &explanation);
     let candidates: Vec<_> = session.candidates().iter().map(|candidate| json!({
         "text": candidate.text, "consumed": candidate.consumed,
         "source": format!("{:?}", candidate.source), "score_bits": candidate.score.to_bits(),
