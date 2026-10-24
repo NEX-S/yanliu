@@ -96,7 +96,7 @@ target/release/yanliu --model data/models/sentence-model.safetensors \
 
 公开发布的两个 v2 模型都从随机权重训练，使用约 5,227 万字符的公共中文文本，再以实际 CLI 候选做排序微调。日常运行只用本机 CPU，不调用远端大模型。
 
-默认下载仍是 `models-v2` 发布的 4M 权重；后续本机训练的修复版尚未发布，直接安装不会取得这些权重更新。版本区别及来源复核见[模型来源复核](data/model-cards/SOURCE-REVIEW.md)。
+默认下载仍是 `models-v2` 发布的 4M 权重；后续本机训练的修复版尚未发布，直接安装不会取得这些权重更新。版本区别及来源复核见[模型来源复核](data/model-cards/SOURCE-REVIEW.md)。本机 4M 在 2026-10-25 的两轮低学习率续训中，分组首选先持平后退步，已保留原权重并停止续训；这些已观测开发结果不构成新的泛化成绩。
 
 - **4M：默认。** 实际 448 万参数，INT8 文件约 4.73 MB，适合日常输入。models-v2 发布时，相比原来本机的 7M，开发集首选命中接近、CPU 开销更低，旧回放集有小幅回退；具体数字见 [4M 模型卡](data/model-cards/yanliu-4m-v2/README.md)。
 - **25M：可选。** 实际 2,354 万参数，INT8 文件约 24.03 MB，models-v2 发布时的留出集首选命中更高，计算量也更高，见 [25M 模型卡](data/model-cards/yanliu-25m-v2/README.md)。
