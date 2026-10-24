@@ -167,7 +167,7 @@ impl Learning {
         candidates
             .into_iter()
             .map(|c| {
-                if c.source == CandidateSource::Completion {
+                if state.counts.is_empty() || c.source == CandidateSource::Completion {
                     return 0;
                 }
                 state

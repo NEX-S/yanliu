@@ -338,7 +338,10 @@ impl Decoder {
             return;
         }
         let ScannedInput {
-            raw, key, raw_ends, ..
+            key,
+            raw_ends,
+            boundaries,
+            ..
         } = input;
         // A callback order is not candidate priority. Keep only the best remaining
         // K tuples by raw consumption, static score, then insertion order ties.
@@ -351,16 +354,16 @@ impl Decoder {
                 let consumed = raw_ends[end];
                 let first_slot = if p == 0 { 0 } else { raw_ends[p - 1] + 1 };
                 for at in first_slot..=raw_ends[p] {
-                    let mut corrected = raw[..consumed].to_owned();
-                    corrected.insert(at, char::from(to));
-                    let boundaries = scan_input(&corrected)
-                        .expect("insertion preserves scanner invariants")
-                        .boundaries;
                     for (row, entry) in rows.clone().take(SPAN_ENTRIES).enumerate() {
-                        if !allowed(&entry, 0, end + 1, &boundaries)
-                            || candidates
-                                .iter()
-                                .any(|c| c.text == entry.text && c.consumed == consumed)
+                        // Insertion before a separator shifts that boundary by one letter.
+                        if !boundaries.iter().all(|&boundary| {
+                            boundary > end
+                                || entry.ends.contains(
+                                    &((boundary + usize::from(at < raw_ends[boundary])) as u16),
+                                )
+                        }) || candidates
+                            .iter()
+                            .any(|c| c.text == entry.text && c.consumed == consumed)
                         {
                             continue;
                         }
