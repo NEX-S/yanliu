@@ -197,7 +197,7 @@ impl Learning {
             }
         }
         let rows: Vec<_> = candidates
-            .map(|c| features(&input[..c.consumed], context, &c.text))
+            .map(|c| features(&input[..c.consumed], context, &c.text, None))
             .collect();
         // A concurrent choice may change parameters or evict this input during feature work.
         let state = self.lock();
@@ -263,20 +263,25 @@ impl Learning {
                     .iter()
                     .any(|index| prior.iter().any(|(scored, _)| scored == index))
         });
-        let prior_rows: Vec<_> = prior
+        let (prior_rows, context_rows): (Vec<_>, Vec<_>) = prior
             .into_iter()
             .flatten()
-            .map(|&(index, _)| features(raw, context, &candidates[index].text))
-            .collect();
+            .map(|&(index, _)| {
+                let mut contextual = Vec::new();
+                let forward =
+                    features(raw, context, &candidates[index].text, Some(&mut contextual));
+                (forward, contextual)
+            })
+            .unzip();
         let chosen_features = if prior.is_none() && !rejected.is_empty() {
-            features(raw, context, &chosen.text)
+            features(raw, context, &chosen.text, None)
         } else {
             Vec::new()
         };
         let rejected_rows: Vec<_> = if prior.is_none() {
             rejected
                 .iter()
-                .map(|&index| features(raw, context, &candidates[index].text))
+                .map(|&index| features(raw, context, &candidates[index].text, None))
                 .collect()
         } else {
             Vec::new()
@@ -332,21 +337,30 @@ impl Learning {
                 .filter(|(_, score)| rejected.contains(&score.index))
                 .max_by(|(_, a), (_, b)| a.total.total_cmp(&b.total))
                 .expect("a rejected candidate has a prior");
-            let mut change = vec![0.0; FEATURES];
+            let mut direction = vec![0.0; FEATURES];
             for &(index, value) in &rows[selected_row] {
-                change[index] += value;
+                direction[index] += value;
             }
             for &(index, value) in &rows[opponent] {
+                direction[index] -= value;
+            }
+            let mut change = vec![0.0; FEATURES];
+            for &(index, value) in &context_rows[selected_row] {
+                change[index] += value;
+            }
+            for &(index, value) in &context_rows[opponent] {
                 change[index] -= value;
             }
-            let norm: f32 = change.iter().map(|value| value * value).sum();
+            let slope: f32 = direction.iter().zip(&change).map(|(d, q)| d * q).sum();
+            let norm_direction: f32 = direction.iter().map(|value| value * value).sum();
+            let norm_context: f32 = change.iter().map(|value| value * value).sum();
             let loss = (crate::model::PROMOTION_MARGIN / scale + rival.total
                 - scores[selected_row].total)
                 .max(0.0);
-            if loss == 0.0 || norm == 0.0 {
+            if loss == 0.0 || slope <= 0.0 || norm_context == 0.0 {
                 None
             } else {
-                let rate = (loss / norm).min(0.5);
+                let rate = (loss / slope).min(0.5 * (norm_direction / norm_context).sqrt());
                 for value in &mut change {
                     *value *= rate;
                 }
@@ -398,7 +412,12 @@ fn grams(text: &[char], maximum: usize) -> Vec<u64> {
 
 /// Signed hashing preserves raw ASCII identity and bounds the feature vector. Stored parameters
 /// are indexed by these features, so any change here invalidates every persisted adapter.
-fn features(input: &str, context: &str, text: &str) -> Vec<(usize, f32)> {
+fn features(
+    input: &str,
+    context: &str,
+    text: &str,
+    context_out: Option<&mut Vec<(usize, f32)>>,
+) -> Vec<(usize, f32)> {
     let input: Vec<char> = input.chars().collect();
     let text: Vec<char> = text.chars().collect();
     let mut context: Vec<char> = context.chars().rev().take(32).collect();
@@ -414,6 +433,7 @@ fn features(input: &str, context: &str, text: &str) -> Vec<(usize, f32)> {
             .flat_map(|ch| (*ch as u32).to_le_bytes()),
     );
     let mut values = [0.0_f32; FEATURES];
+    let mut context_values = context_out.as_ref().map(|_| vec![0.0_f32; FEATURES]);
     let mut add = |family: u8, left: u64, right: u64| {
         let value = hash(
             [family]
@@ -421,7 +441,14 @@ fn features(input: &str, context: &str, text: &str) -> Vec<(usize, f32)> {
                 .chain(left.to_le_bytes())
                 .chain(right.to_le_bytes()),
         );
-        values[value as usize % FEATURES] += if value >> 63 == 0 { 1.0 } else { -1.0 };
+        let index = value as usize % FEATURES;
+        let sign = if value >> 63 == 0 { 1.0 } else { -1.0 };
+        values[index] += sign;
+        if let Some(values) = &mut context_values
+            && matches!(family, 2 | 5 | 6)
+        {
+            values[index] += sign;
+        }
     };
     for gram in input_grams {
         add(0, gram, 0);
@@ -440,6 +467,14 @@ fn features(input: &str, context: &str, text: &str) -> Vec<(usize, f32)> {
         add(5, gram, text_id);
     }
     let norm = values.iter().map(|value| value * value).sum::<f32>().sqrt();
+    // Context contributions share the full forward norm and the existing weight buckets.
+    if let Some((output, values)) = context_out.zip(context_values) {
+        *output = values
+            .into_iter()
+            .enumerate()
+            .filter_map(|(index, value)| (value != 0.0).then_some((index, value / norm)))
+            .collect();
+    }
     values
         .into_iter()
         .enumerate()
@@ -762,51 +797,86 @@ mod tests {
     }
 
     #[test]
-    fn adaptive_feedback_recomputes_after_count_and_uses_the_strongest_passed_over_candidate() {
-        let learning = Learning::new(true);
-        let mut candidates = [candidate("你", 2), candidate("泥", 2), candidate("拟", 2)];
-        candidates[0].source = CandidateSource::ExactDictionary;
-        for (candidate, score) in candidates.iter_mut().zip([3.0, 2.0, 1.0]) {
-            candidate.score = score;
-        }
-        let prior = [(0, -10.0), (1, -0.2), (2, -2.0)];
-        let old = vec![0.001; FEATURES];
-        learning.lock().adapter = Some(old.clone());
-        let rows: Vec<_> = candidates
-            .iter()
-            .map(|candidate| features("ni", "道路上的", &candidate.text))
-            .collect();
-        let personal = |row: &Vec<(usize, f32)>| {
-            row.iter()
-                .map(|&(index, value)| old[index] * value)
-                .sum::<f32>()
-        };
-        let scale = -2.2_f32 - -10.0;
-        let rival = -2.2 / scale + personal(&rows[1]);
-        let selected = -6.0 / scale + personal(&rows[2]) + 0.15 * 1.0_f32.ln_1p();
-        let mut direction = vec![0.0; FEATURES];
-        for &(index, value) in &rows[2] {
-            direction[index] += value;
-        }
-        for &(index, value) in &rows[1] {
-            direction[index] -= value;
-        }
-        let norm: f32 = direction.iter().map(|value| value * value).sum();
-        let rate = ((crate::model::PROMOTION_MARGIN / scale + rival - selected) / norm).min(0.5);
-        assert!(rate > 0.0 && rate < 0.5);
-        assert!(learning.record_choice("ni", "道路上的", &candidates, 2, None, Some(&prior)));
-        let state = learning.lock();
-        assert_eq!(state.counts.get(&("ni".into(), "拟".into())), Some(&1));
-        assert_eq!(state.updates, 1);
-        for ((&actual, old), direction) in state
-            .adapter
-            .as_ref()
-            .unwrap()
-            .iter()
-            .zip(old)
-            .zip(direction)
-        {
-            assert!((actual - (old + rate * direction)).abs() < 1e-7);
+    fn contextual_direction_uses_post_count_scores_and_the_existing_update_norm_budget() {
+        let input = "kaiyuan";
+        let context = "这座城市位于辽宁省，名叫";
+        // This pair has cross-family aliases, so d·q differs from the context norm squared.
+        for (selected_language, capped) in [(-2.0, false), (-20.0, true)] {
+            let learning = Learning::new(true);
+            let mut candidates = [
+                candidate("开园", input.len()),
+                candidate("开源", input.len()),
+                candidate("开原", input.len()),
+            ];
+            candidates[0].source = CandidateSource::ExactDictionary;
+            for (candidate, score) in candidates.iter_mut().zip([3.0, 2.0, 2.0]) {
+                candidate.score = score;
+            }
+            let prior = [(0, -10.0), (1, -0.2), (2, selected_language)];
+            let old = vec![0.001; FEATURES];
+            learning.lock().adapter = Some(old.clone());
+            let (rows, context_rows): (Vec<_>, Vec<_>) = candidates
+                .iter()
+                .map(|candidate| {
+                    let mut contextual = Vec::new();
+                    let forward = features(input, context, &candidate.text, Some(&mut contextual));
+                    (forward, contextual)
+                })
+                .unzip();
+            let personal = |row: &Vec<(usize, f32)>| {
+                row.iter()
+                    .map(|&(index, value)| old[index] * value)
+                    .sum::<f32>()
+            };
+            let selected_base = selected_language - 2.0;
+            let scale = -2.2_f32 - (-10.0_f32).min(selected_base);
+            let rival = -2.2 / scale + personal(&rows[1]);
+            let selected = selected_base / scale + personal(&rows[2]) + 0.15 * 1.0_f32.ln_1p();
+            let mut direction = vec![0.0; FEATURES];
+            for &(index, value) in &rows[2] {
+                direction[index] += value;
+            }
+            for &(index, value) in &rows[1] {
+                direction[index] -= value;
+            }
+            let mut contextual = vec![0.0; FEATURES];
+            for &(index, value) in &context_rows[2] {
+                contextual[index] += value;
+            }
+            for &(index, value) in &context_rows[1] {
+                contextual[index] -= value;
+            }
+            let slope: f32 = direction.iter().zip(&contextual).map(|(d, q)| d * q).sum();
+            let norm_direction: f32 = direction.iter().map(|value| value * value).sum();
+            let norm_context: f32 = contextual.iter().map(|value| value * value).sum();
+            let budget = 0.5 * (norm_direction / norm_context).sqrt();
+            let rate =
+                ((crate::model::PROMOTION_MARGIN / scale + rival - selected) / slope).min(budget);
+            assert!((slope - norm_context).abs() > 1e-4);
+            assert!(rate > 0.0);
+            if capped {
+                assert!(rate > 0.5);
+                assert_eq!(rate, budget);
+            } else {
+                assert!(rate < budget);
+            }
+            assert!(learning.record_choice(input, context, &candidates, 2, None, Some(&prior)));
+            let state = learning.lock();
+            assert_eq!(state.counts.get(&(input.into(), "开原".into())), Some(&1));
+            assert_eq!(state.updates, 1);
+            let mut actual_norm_squared = 0.0;
+            for ((&actual, old), contextual) in state
+                .adapter
+                .as_ref()
+                .unwrap()
+                .iter()
+                .zip(old)
+                .zip(contextual)
+            {
+                assert!((actual - (old + rate * contextual)).abs() < 1e-7);
+                actual_norm_squared += (actual - old).powi(2);
+            }
+            assert!(actual_norm_squared.sqrt() <= 0.5 * norm_direction.sqrt() + 1e-6);
         }
     }
 
@@ -823,13 +893,39 @@ mod tests {
     }
 
     #[test]
+    fn forward_feature_bits_match_the_previous_mapping_with_or_without_context_output() {
+        let long = format!("旧文{}", "语".repeat(32));
+        for (input, context, text, expected) in [
+            ("Rust", "编程语言", "Rust", 0x93a91520537ecde6),
+            ("kaiyuan", "乘高铁前往", "开原", 0x5721b2d2a5272b10),
+            ("xian", long.as_str(), "西安", 0x12bd09676ca66c32),
+            ("ni", "", "泥", 0xe6f775c7564f94b7),
+        ] {
+            let forward = features(input, context, text, None);
+            let mut contextual = Vec::new();
+            let with_context = features(input, context, text, Some(&mut contextual));
+            assert_eq!(forward, with_context);
+            let fingerprint = hash(forward.iter().flat_map(|&(index, value)| {
+                (index as u64)
+                    .to_le_bytes()
+                    .into_iter()
+                    .chain(value.to_bits().to_le_bytes())
+            }));
+            assert_eq!(fingerprint, expected);
+            if context.is_empty() {
+                assert!(contextual.is_empty());
+            }
+        }
+    }
+
+    #[test]
     fn features_preserve_condition_and_ascii_identity() {
-        let reference = features("Rust", "编程语言", "Rust");
+        let reference = features("Rust", "编程语言", "Rust", None);
         for alternative in [
-            features("rust", "编程语言", "Rust"),
-            features("Rust", "金属生锈", "Rust"),
-            features("Rust", "编程语言", "rust"),
-            features("rusi", "编程语言", "Rust"),
+            features("rust", "编程语言", "Rust", None),
+            features("Rust", "金属生锈", "Rust", None),
+            features("Rust", "编程语言", "rust", None),
+            features("rusi", "编程语言", "Rust", None),
         ] {
             assert_ne!(reference, alternative);
         }
@@ -840,11 +936,11 @@ mod tests {
         );
         let norm: f32 = reference.iter().map(|(_, value)| value * value).sum();
         assert!((norm - 1.0).abs() < 1e-5);
-        assert_eq!(features("", "", ""), Vec::new());
+        assert_eq!(features("", "", "", None), Vec::new());
         let suffix = "语".repeat(32);
         assert_eq!(
-            features("x", &suffix, "西"),
-            features("x", &format!("旧文{suffix}"), "西")
+            features("x", &suffix, "西", None),
+            features("x", &format!("旧文{suffix}"), "西", None)
         );
     }
 
