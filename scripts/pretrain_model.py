@@ -159,7 +159,7 @@ def evaluate_text(model, corpus, batches, device, precision, torch):
         for number, indices in enumerate(batches, 1):
             inputs, targets, n = text_batch(corpus, indices, device, torch)
             with autocast(device, precision, torch):
-                _, loss = model(inputs, targets)
+                loss = model(inputs, targets)[1]
             value = loss.item()
             if not math.isfinite(value):
                 raise ValueError(f"nonfinite development text loss at batch {number}, effective_targets={n}")
@@ -299,7 +299,7 @@ def main():
                 group["lr"] = learning_rate(seen + n, planned_targets, position_budget, args.lr)
             optimizer.zero_grad(set_to_none=True)
             with autocast(args.device, args.precision, torch):
-                _, loss = model(inputs, targets)
+                loss = model(inputs, targets)[1]
             value = loss.item()
             if not math.isfinite(value):
                 raise ValueError(f"nonfinite text loss at optimizer step {steps}")
