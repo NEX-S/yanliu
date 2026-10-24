@@ -1000,6 +1000,46 @@ mod cache_tests {
         assert!(fresh.candidates().contains(&candidate));
     }
     #[test]
+    fn learned_prefix_does_not_leave_an_unconsumed_apostrophe() {
+        let decoder = decoder();
+        let learning = Arc::new(Learning::new(false));
+        let mut session = Session::new(decoder, Some(learning.clone()));
+        session.insert("ni").unwrap();
+        let index = session
+            .candidates()
+            .iter()
+            .position(|c| c.text == "你" && c.consumed == 2)
+            .unwrap();
+        assert_eq!(session.select(index).as_deref(), Some("你"));
+        assert_eq!(count(&learning, "ni", "你"), 1);
+
+        session.insert("ni'hao").unwrap();
+        assert!(
+            !session
+                .candidates()
+                .iter()
+                .any(|c| c.text == "你" && c.consumed == 2)
+        );
+        let index = session
+            .candidates()
+            .iter()
+            .position(|c| c.text == "你" && c.consumed == 3)
+            .unwrap();
+        assert_eq!(session.select(index).as_deref(), Some("你"));
+        assert_eq!(session.input(), "hao");
+        let index = session
+            .candidates()
+            .iter()
+            .position(|c| c.text == "好" && c.consumed == 3)
+            .unwrap();
+        assert_eq!(session.select(index).as_deref(), Some("好"));
+        assert_eq!(session.input(), "");
+        assert_eq!(count(&learning, "ni", "你"), 1);
+        assert_eq!(count(&learning, "ni'", "你"), 1);
+        assert_eq!(count(&learning, "ni'hao", "你好"), 1);
+    }
+
+    #[test]
     fn non_completion_partial_selection_learns_only_raw_consumed_prefix() {
         let decoder = decoder();
         let learning = Arc::new(Learning::new(false));

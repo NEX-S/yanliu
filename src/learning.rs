@@ -105,6 +105,9 @@ impl Learning {
         }
         let mut rows = Vec::new();
         for consumed in 1..=input.len() {
+            if input.as_bytes().get(consumed) == Some(&b'\'') {
+                continue;
+            }
             let prefix = &input[..consumed];
             if consumed == 1
                 && input.len() != 1
@@ -1423,14 +1426,14 @@ mod tests {
                 assert!(learning.record_choice("ni", "", &[candidate(&text, 2)], 0, None, None));
             }
         }
-        assert!(learning.record_choice("ni'", "", &[candidate("边界", 3)], 0, None, None));
-        assert!(learning.record_choice("ni'hao", "", &[candidate("完整", 6)], 0, None, None));
-        let recalled = learning.recall("ni'hao", &[]);
+        assert!(learning.record_choice("nihao'", "", &[candidate("边界", 6)], 0, None, None));
+        assert!(learning.record_choice("nihao'hao", "", &[candidate("完整", 9)], 0, None, None));
+        let recalled = learning.recall("nihao'hao", &[]);
         assert_eq!(recalled.len(), RECALL_LIMIT);
         assert_eq!(recalled[0].text, "完整");
-        assert_eq!(recalled[0].consumed, 6);
+        assert_eq!(recalled[0].consumed, 9);
         assert_eq!(recalled[1].text, "边界");
-        assert_eq!(recalled[1].consumed, 3);
+        assert_eq!(recalled[1].consumed, 6);
         assert_eq!(
             recalled[2..]
                 .iter()
@@ -1444,8 +1447,8 @@ mod tests {
                 .all(|candidate| candidate.source == CandidateSource::User)
         );
         assert!(learning.recall("", &[]).is_empty());
-        let baseline = vec![candidate("完整", 6), candidate("边界", 3)];
-        let recalled = learning.recall("ni'hao", &baseline);
+        let baseline = vec![candidate("完整", 9), candidate("边界", 6)];
+        let recalled = learning.recall("nihao'hao", &baseline);
         assert_eq!(recalled.len(), RECALL_LIMIT);
         assert!(
             recalled
@@ -1456,9 +1459,9 @@ mod tests {
         );
 
         let decoder = decoder("你\tni\t100\n好\thao\t100\n");
-        let public = decoder.decode("ni'hao");
+        let public = decoder.decode("nihao'hao");
         let mut session = Session::new(decoder, Some(Arc::new(learning)));
-        session.insert("ni'hao").unwrap();
+        session.insert("nihao'hao").unwrap();
         assert_eq!(session.candidates().len(), public.len() + RECALL_LIMIT);
         assert_eq!(
             session
