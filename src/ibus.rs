@@ -828,8 +828,11 @@ impl Engine {
             ));
         }
         // Replacement starts at the earlier end of the selection in either direction.
-        let context: String = text.chars().take(cursor.min(anchor) as usize).collect();
-        if self.session.set_context(&context) {
+        let end = text
+            .char_indices()
+            .nth(cursor.min(anchor) as usize)
+            .map_or(text.len(), |(index, _)| index);
+        if self.session.set_context(&text[..end]) {
             self.cursor = 0;
             self.publish(&emitter).await?;
             self.rank(&emitter);
@@ -1718,6 +1721,8 @@ mod tests {
             (text, 9, 0, ""),
             (text, 0, 9, ""),
             (text, 0, 0, ""),
+            (text, 10, 10, text),
+            ("", 0, 0, ""),
             (long.as_str(), 71, 70, long_context.as_str()),
             (long.as_str(), 70, 71, long_context.as_str()),
         ] {
