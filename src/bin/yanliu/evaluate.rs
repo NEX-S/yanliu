@@ -5,7 +5,7 @@ use std::{
     collections::BTreeMap,
     fmt::Display,
     fs::{File, OpenOptions},
-    io::{self, BufRead, BufReader, Write},
+    io::{self, BufRead, BufReader, BufWriter, Write},
     os::unix::fs::OpenOptionsExt,
     path::Path,
     sync::Arc,
@@ -159,18 +159,25 @@ pub fn run(
     if rows.is_empty() {
         return Err(format!("{}: no cases", data.display()).into());
     }
-    let report = json!({"format": "yanliu-candidate-check-v1", "buckets": buckets, "rows": rows});
+    let mut report = json!({"format": "yanliu-candidate-check-v1", "buckets": buckets});
+    // Move rows: json! would clone the full candidate tree.
+    report["rows"] = Value::Array(rows);
     if output == Path::new("-") {
-        println!("{}", serde_json::to_string_pretty(&report)?);
+        let mut writer = BufWriter::new(io::stdout().lock());
+        serde_json::to_writer_pretty(&mut writer, &report)?;
+        writeln!(writer)?;
+        writer.flush()?;
     } else {
         // Never replace an earlier report.
-        OpenOptions::new()
+        let file = OpenOptions::new()
             .write(true)
             .create_new(true)
             .mode(0o600)
             .open(output)
-            .map_err(|error| format!("{}: {error}", output.display()))?
-            .write_all(&serde_json::to_vec_pretty(&report)?)?;
+            .map_err(|error| format!("{}: {error}", output.display()))?;
+        let mut writer = BufWriter::new(file);
+        serde_json::to_writer_pretty(&mut writer, &report)?;
+        writer.flush()?;
         println!("{}", serde_json::to_string_pretty(&report["buckets"])?);
     }
     Ok(())
