@@ -222,9 +222,9 @@ impl Decoder {
                     }
                 }
             }
-            // Initials for every syllable form a full abbreviation, not a completion;
-            // a span that still prefixes some pinyin stays on the exact path.
-            if abbreviate
+            // An explicit split distinguishes xi'anq from xianq. Offer this
+            // shorthand only at the current end so ni'h cannot parent ni'ha.
+            if (abbreviate || (end == n && boundaries.iter().any(|&boundary| boundary < end)))
                 && let Some(pieces) = abbreviation(&self.dictionary, &key[..end], boundaries)
             {
                 let initials: Vec<u8> = pieces
@@ -586,7 +586,13 @@ fn abbreviation<'a>(
     let mut pieces = Vec::new();
     let mut start = 0;
     while start < key.len() {
-        let rest = &key[start..];
+        let end = boundaries
+            .iter()
+            .copied()
+            .find(|&boundary| boundary > start)
+            .unwrap_or(key.len())
+            .min(key.len());
+        let rest = &key[start..end];
         let (len, complete) = match dictionary.longest_syllable(rest) {
             Some(len) => (len, true),
             None if ["zh", "ch", "sh"]
@@ -597,12 +603,6 @@ fn abbreviation<'a>(
             }
             None => (1, false),
         };
-        if boundaries
-            .iter()
-            .any(|&boundary| start < boundary && boundary < start + len)
-        {
-            return None;
-        }
         pieces.push((&rest[..len], complete));
         start += len;
     }
@@ -757,6 +757,52 @@ mod tests {
                 extended_score(0.0, &entry, true).to_bits()
             );
         }
+    }
+
+    #[test]
+    fn explicit_boundaries_keep_mixed_abbreviations_confirmable_and_learnable() {
+        let d = Arc::new(decoder(
+            "西安区\txi an qu\t100\n咸区\txian qu\t200\n西\txi\t20\n安\tan\t20\n区\tqu\t20\n咸\txian\t20\n",
+        ));
+        for raw in ["xi'anq", "xi'an'q", "Xi'AnQ"] {
+            let learning = Arc::new(Learning::new(false));
+            let mut session = Session::new(d.clone(), Some(learning.clone()));
+            session.insert(raw).unwrap();
+            let index = session
+                .candidates()
+                .iter()
+                .position(|c| c.text == "西安区" && c.consumed == raw.len())
+                .unwrap();
+            let candidate = session.candidates()[index].clone();
+            assert_eq!(candidate.source, CandidateSource::ExactDictionary, "{raw}");
+            assert!(!session.candidates().iter().any(|c| {
+                c.text == "咸区"
+                    && c.consumed == raw.len()
+                    && c.source == CandidateSource::ExactDictionary
+            }));
+            assert_eq!(session.select(index).as_deref(), Some("西安区"));
+            assert_eq!(session.input(), "");
+            assert_eq!(learning.counts(raw, &[candidate]), [1]);
+        }
+        assert!(d.decode("xianq").iter().any(|c| {
+            c.text == "咸区" && c.consumed == 5 && c.source == CandidateSource::Completion
+        }));
+    }
+
+    #[test]
+    fn explicit_abbreviation_does_not_become_a_longer_pinyin_parent() {
+        let d =
+            decoder("你好\tni hao\t100\n你会\tni hui\t200\n你\tni\t10\n哈\tha\t10\n啊\ta\t10\n");
+        assert!(d.decode("ni'h").iter().any(|c| {
+            c.text == "你会" && c.consumed == 4 && c.source == CandidateSource::ExactDictionary
+        }));
+        let candidates = d.decode("ni'ha");
+        assert!(!candidates.iter().any(|c| c.text == "你会啊"));
+        assert!(
+            candidates
+                .iter()
+                .any(|c| c.text == "你好" && c.source == CandidateSource::Completion)
+        );
     }
 
     #[test]

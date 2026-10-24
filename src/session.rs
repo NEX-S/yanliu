@@ -968,7 +968,7 @@ mod cache_tests {
         let learning = Arc::new(Learning::new(false));
         let mut session = Session::new(decoder.clone(), Some(learning.clone()));
         session.set_context("问");
-        session.insert("ni'h").unwrap();
+        session.insert("ni'ha").unwrap();
         session.move_cursor(-1);
         let index = session
             .candidates()
@@ -976,11 +976,11 @@ mod cache_tests {
             .position(|c| c.text == "你好" && c.source == CandidateSource::Completion)
             .unwrap();
         let candidate = session.candidates()[index].clone();
-        assert_eq!(candidate.consumed, "ni'h".len());
+        assert_eq!(candidate.consumed, "ni'ha".len());
         let revision = session.revision();
         let learning_revision = learning.revision();
         assert_eq!(
-            learning.counts("ni'h", std::slice::from_ref(&candidate)),
+            learning.counts("ni'ha", std::slice::from_ref(&candidate)),
             [0]
         );
 
@@ -991,12 +991,12 @@ mod cache_tests {
         assert!(session.revision() > revision);
         assert_eq!(learning.revision(), learning_revision);
         assert_eq!(
-            learning.counts("ni'h", std::slice::from_ref(&candidate)),
+            learning.counts("ni'ha", std::slice::from_ref(&candidate)),
             [0]
         );
 
         let mut fresh = Session::new(decoder, Some(learning));
-        fresh.insert("ni'h").unwrap();
+        fresh.insert("ni'ha").unwrap();
         assert!(fresh.candidates().contains(&candidate));
     }
     #[test]
