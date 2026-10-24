@@ -999,8 +999,8 @@ mod tests {
     fn previous_inference_matches_a_fresh_model() {
         let mut used = model();
         let previous = [
-            candidate("现", 4, CandidateSource::Composed),
-            candidate("西安", 4, CandidateSource::Composed),
+            candidate("现", 4, CandidateSource::ExactDictionary),
+            candidate("西安", 4, CandidateSource::ExactDictionary),
         ];
         assert_eq!(
             used.score_candidates(&snapshot("xian", "我去", &previous), &[])
@@ -1041,9 +1041,9 @@ mod tests {
     fn real_model_proposes_existing_full_candidate_and_protects_leader() {
         let mut model = model();
         let mut candidates = vec![
-            candidate("现", 4, CandidateSource::Composed),
-            candidate("西", 2, CandidateSource::Composed),
-            candidate("西安", 4, CandidateSource::Composed),
+            candidate("现", 4, CandidateSource::ExactDictionary),
+            candidate("西", 2, CandidateSource::ExactDictionary),
+            candidate("西安", 4, CandidateSource::ExactDictionary),
         ];
         let promote = |model: &mut Model, context: &str, candidates: &[Candidate]| {
             model

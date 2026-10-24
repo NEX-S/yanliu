@@ -94,21 +94,24 @@ target/release/yanliu --model data/models/sentence-model.safetensors \
 
 ## 模型
 
-公开发布的两个 v2 模型都从随机权重训练，使用约 5,227 万字符的公共中文文本，再以实际 CLI 候选做排序微调。日常运行只用本机 CPU，不调用远端大模型。
+默认下载仍是 `models-v2` 发布的 4M 权重，实际 448 万参数，INT8 文件约 4.73 MB。日常运行只用本机 CPU，不调用远端大模型。
 
-默认下载仍是 `models-v2` 发布的 4M 权重；后续本机训练的修复版尚未发布，直接安装不会取得这些权重更新。版本区别及来源复核见[模型来源复核](data/model-cards/SOURCE-REVIEW.md)。本机 4M 在 2026-10-25 的两轮低学习率续训中，分组首选先持平后退步，已保留原权重并停止续训；这些已观测开发结果不构成新的泛化成绩。
+新发布的 `models-v3` 提供本机选定的 4M 修复版 `ca1f0279…`。它在常用词、语境和已知修复集上有所改善，但当前同一 CLI 的已观测 2,000 条句子回归首选由旧默认的 1,431 降为 1,419，因此作为可选版本提供，公共默认不自动更换。这些材料存在训练与历史观测关系，不代表独立泛化成绩。
 
-- **4M：默认。** 实际 448 万参数，INT8 文件约 4.73 MB，适合日常输入。models-v2 发布时，相比原来本机的 7M，开发集首选命中接近、CPU 开销更低，旧回放集有小幅回退；具体数字见 [4M 模型卡](data/model-cards/yanliu-4m-v2/README.md)。
+2026-10-25 的两轮低学习率续训中，分组首选先持平后退步，已保留原权重并停止续训，没有扩大模型。完整停止依据与取舍见[模型来源复核](data/model-cards/SOURCE-REVIEW.md)。
+
+- **4M：默认。** `models-v2` 版本，历史指标见 [4M v2 模型卡](data/model-cards/yanliu-4m-v2/README.md)。
+- **4M v3：可选修复版。** 权重、来源声明与续训停止记录见 [4M v3 模型卡](data/model-cards/yanliu-4m-v3/README.md)。显式指定 `YANLIU_MODEL_DIR` 可更换；已有 CPU 安装升级默认保留已安装模型。
 - **25M：可选。** 实际 2,354 万参数，INT8 文件约 24.03 MB，models-v2 发布时的留出集首选命中更高，计算量也更高，见 [25M 模型卡](data/model-cards/yanliu-25m-v2/README.md)。
 
-models-v2 发布时，在权重和默认选择冻结后的 1,750 条留出样本上，首选命中率为 4M **73.49%**、25M **75.77%**，原本机 7M 为 **71.54%**。所有样本均计入分母，包括未召回的目标；自动注音和来源文本仍可能有误，这些数字不等同于日常输入准确率。
+历史 models-v2 的两个模型从随机权重训练，使用约 5,227 万字符的公共中文文本，再以实际 CLI 候选微调。models-v2 发布时，在权重和默认选择冻结后的 1,750 条留出样本上，首选命中率为 4M **73.49%**、25M **75.77%**，原本机 7M 为 **71.54%**。所有样本均计入分母，包括未召回的目标；自动注音和来源文本仍可能有误，这些数字不等同于日常输入准确率。
 
-models-v2 发布时的三轮 CPU 回放中，发生模型评分的帧，输入处理与候选提升合计 p95 为 4M **4.15 ms**、25M **35.70 ms**。这组历史基准使用相同的 Session 和静态候选池，只测进程内处理，不含 IBus 通信与 GNOME 绘制。当前代码已加入拼音约束的模型召回，其开销需按新路径单独测量。
+models-v2 发布时的三轮 CPU 回放中，发生模型评分的帧，输入处理与候选提升合计 p95 为 4M **4.15 ms**、25M **35.70 ms**。这组历史基准使用相同的 Session 和静态候选池，只测进程内处理，不含 IBus 通信与 GNOME 绘制。当前代码已加入拼音约束的模型召回；当前两版 4M 的同路径对照见[模型来源复核](data/model-cards/SOURCE-REVIEW.md)，与这组历史基准口径不同。
 
-默认资产由 `fetch_assets.py` 下载并校验 SHA-256；`python3 scripts/fetch_assets.py --verify-only` 可检查本地文件。[模型发布页](https://github.com/NEX-S/yanliu/releases/tag/models-v2)提供两个模型的压缩包，包含权重、来源和评测说明。解包后可在首次安装时指定：
+默认资产由 `fetch_assets.py` 下载并校验 SHA-256；`python3 scripts/fetch_assets.py --verify-only` 可检查本地文件。[4M v3 发布页](https://github.com/NEX-S/yanliu/releases/tag/models-v3)提供可选修复版；[历史 v2 发布页](https://github.com/NEX-S/yanliu/releases/tag/models-v2)保留 4M / 25M 压缩包。包中包含权重、来源和评测说明。解包后可在首次安装时指定：
 
 ```sh
-YANLIU_MODEL_DIR=/absolute/path/to/yanliu-25m-v2 \
+YANLIU_MODEL_DIR=/absolute/path/to/yanliu-4m-v3 \
   ./packaging/install-local.sh
 ```
 
