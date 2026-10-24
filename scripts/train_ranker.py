@@ -285,7 +285,7 @@ def candidate_additions(case, static, row):
     ordinary = {identity[:2] for identity in old
                 if identity[2] != "Completion" and not is_correction(identity[2])}
     if (static["static_rank"] != row["static_rank"] or
-            any(consumed != len(case["input"].encode("utf-8")) or source != "Composed"
+            any(consumed != len(case["input"].encode("utf-8")) or source not in {"ExactDictionary", "Composed"}
                 or (text, consumed) in ordinary
                 for text, consumed, source, _ in additions) or
             any((source != "Completion" and not is_correction(source))

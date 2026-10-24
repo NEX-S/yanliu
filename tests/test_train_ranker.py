@@ -291,6 +291,21 @@ class TrainingDataTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "candidate identity"):
             TRAIN.compare_reports(cases, before, after, static)
 
+    def test_selection_accepts_complete_dictionary_reading_replacing_correction(self):
+        cases = [{"id": "1", "input": "yao", "golds": ["要"]}]
+        exact = candidate("要", source="ExactDictionary", consumed=3)
+        correction = candidate("陶", score=-1.180973649, consumed=3,
+                               source="NeighborSubstitution { at: 0, to: 116, ends: [3] }")
+        before = report([{"id": "1", "rank": 1, "static_rank": 1,
+                          "candidates": [exact, correction]}])
+        after = report([{"id": "1", "rank": 1, "static_rank": 1,
+                         "candidates": [exact, candidate("陶", score=-1.950489521,
+                                                        source="ExactDictionary", consumed=3)]}])
+        result = TRAIN.compare_reports(cases, before, after, before)
+        self.assertEqual(result["added_candidates"], 1)
+        self.assertTrue(result["static_candidate_identity_preserved"])
+        self.assertFalse(result["candidate_identity_unchanged"])
+
     def test_selection_rejects_damaged_old_identity_and_unsupported_recall(self):
         cases = [{"id": "1", "input": "xian", "golds": ["现"]}]
         exact = candidate("现", source="ExactDictionary")
@@ -302,7 +317,8 @@ class TrainingDataTests(unittest.TestCase):
                 changed["rows"][0]["candidates"][0][field] = value
                 with self.assertRaisesRegex(ValueError, "candidate identity"):
                     TRAIN.compare_reports(cases, before, changed, before)
-        for added in [candidate("先", source="ExactDictionary"), candidate("先", consumed=3),
+        for added in [candidate("先", source="User"), candidate("先", source="Completion"),
+                      candidate("先", source="ExactDictionary", consumed=3), candidate("先", consumed=3),
                       candidate("现", score=-1.0)]:
             with self.subTest(added=added):
                 changed = json.loads(json.dumps(before))
