@@ -265,17 +265,18 @@ impl Session {
         }
     }
     /// Apply original-menu indices without changing input or advancing its revision.
+    /// Returns whether the menu changed, or `None` for a stale revision.
     /// The leader decision is separate from ordering the remaining scored slots.
     pub fn apply_candidates(
         &mut self,
         revision: u64,
         candidates: Vec<Candidate>,
         promotion: &Promotion,
-    ) -> bool {
+    ) -> Option<bool> {
         if revision != self.revision {
-            return false;
+            return None;
         }
-        self.candidates = candidates;
+        let previous = std::mem::replace(&mut self.candidates, candidates);
         // Scores still address the original menu after the leader has moved.
         let mut source_order: Vec<_> = (0..self.candidates.len()).collect();
         let order = &promotion.order;
@@ -344,7 +345,7 @@ impl Session {
                 })
                 .collect()
         });
-        true
+        Some(self.candidates != previous)
     }
     fn append_context(&mut self, text: &str) {
         let context = format!("{}{text}", self.context);
@@ -527,11 +528,15 @@ mod cache_tests {
         assert!(!session.delete_forward());
         session.move_cursor(-1);
         let snapshot = session.snapshot();
-        assert!(session.apply_candidates(
-            snapshot.revision,
-            snapshot.candidates,
-            &crate::model::Promotion::for_test(Some(0), &[])
-        ));
+        assert!(
+            session
+                .apply_candidates(
+                    snapshot.revision,
+                    snapshot.candidates,
+                    &crate::model::Promotion::for_test(Some(0), &[])
+                )
+                .is_some()
+        );
         choose(&mut session, "好", 3);
         assert_eq!(count(&learning, "nihao", "你好"), 1);
     }
@@ -676,14 +681,22 @@ mod cache_tests {
             })
             .collect();
         let original = snapshot.candidates.clone();
-        assert!(session.apply_candidates(snapshot.revision, snapshot.candidates, &promotion));
+        assert!(
+            session
+                .apply_candidates(snapshot.revision, snapshot.candidates, &promotion)
+                .is_some()
+        );
         for &(index, language) in session.feedback.as_ref().unwrap() {
             let original_index = (-language - 1.0) as usize;
             assert_eq!(session.candidates[index], original[original_index]);
         }
         session.set_context("另一段前文");
         assert!(session.feedback.is_none());
-        assert!(!session.apply_candidates(snapshot.revision, original, &promotion));
+        assert!(
+            session
+                .apply_candidates(snapshot.revision, original, &promotion)
+                .is_none()
+        );
         assert!(session.feedback.is_none());
     }
 
@@ -714,11 +727,15 @@ mod cache_tests {
         let cursor = session.cursor();
         // The highest score is below the existing promotion threshold, so the
         // leader remains fixed while the remaining scored alternatives move.
-        assert!(session.apply_candidates(
-            revision,
-            candidates,
-            &crate::model::Promotion::for_test(None, &[5, 0, 3, 1])
-        ));
+        assert!(
+            session
+                .apply_candidates(
+                    revision,
+                    candidates,
+                    &crate::model::Promotion::for_test(None, &[5, 0, 3, 1])
+                )
+                .is_some()
+        );
         assert_eq!(
             session
                 .candidates()
@@ -752,11 +769,15 @@ mod cache_tests {
         }
         session.insert("x").unwrap();
         let current = session.snapshot();
-        assert!(!session.apply_candidates(
-            revision,
-            original,
-            &crate::model::Promotion::for_test(Some(usize::MAX), &[usize::MAX])
-        ));
+        assert!(
+            session
+                .apply_candidates(
+                    revision,
+                    original,
+                    &crate::model::Promotion::for_test(Some(usize::MAX), &[usize::MAX])
+                )
+                .is_none()
+        );
         assert_eq!(session.candidates(), current.candidates);
     }
 
@@ -798,11 +819,15 @@ mod cache_tests {
             } else {
                 ["尼", "拟", "你好", "泥", "你", "腻", "年", "呢", "匿"]
             };
-            assert!(session.apply_candidates(
-                session.revision(),
-                candidates,
-                &crate::model::Promotion::for_test(Some(5), &[8, 5, 3, 1, 0])
-            ));
+            assert!(
+                session
+                    .apply_candidates(
+                        session.revision(),
+                        candidates,
+                        &crate::model::Promotion::for_test(Some(5), &[8, 5, 3, 1, 0])
+                    )
+                    .is_some()
+            );
             assert_eq!(
                 session
                     .candidates()
@@ -847,11 +872,15 @@ mod cache_tests {
         );
         let revision = session.revision();
         let cursor = session.cursor();
-        assert!(session.apply_candidates(
-            revision,
-            snapshot.candidates,
-            &crate::model::Promotion::for_test(Some(included[1]), &[])
-        ));
+        assert!(
+            session
+                .apply_candidates(
+                    revision,
+                    snapshot.candidates,
+                    &crate::model::Promotion::for_test(Some(included[1]), &[])
+                )
+                .is_some()
+        );
         assert_eq!((session.input(), session.context()), ("nihao", "请先"));
         assert_eq!((session.revision(), session.cursor()), (revision, cursor));
         assert_eq!(session.select(0).as_deref(), Some("拟好"));
@@ -866,11 +895,15 @@ mod cache_tests {
         let snapshot = session.snapshot();
         session.insert("hao").unwrap();
         let current = session.snapshot();
-        assert!(!session.apply_candidates(
-            snapshot.revision,
-            snapshot.candidates,
-            &crate::model::Promotion::for_test(Some(0), &[])
-        ));
+        assert!(
+            session
+                .apply_candidates(
+                    snapshot.revision,
+                    snapshot.candidates,
+                    &crate::model::Promotion::for_test(Some(0), &[])
+                )
+                .is_none()
+        );
         assert_eq!(session.candidates(), current.candidates);
         assert_eq!(session.revision(), current.revision);
     }
@@ -882,7 +915,7 @@ mod cache_tests {
         assert!(session.set_context(&context));
         session.insert("ni").unwrap();
         let snapshot = session.snapshot();
-        session.apply_candidates(
+        let _ = session.apply_candidates(
             snapshot.revision,
             snapshot.candidates,
             &crate::model::Promotion::for_test(Some(1), &[]),
@@ -925,7 +958,7 @@ mod cache_tests {
         };
         let mut snapshot = session.snapshot();
         let indices = snapshot.include_candidates(&[candidate("拟好")]);
-        session.apply_candidates(
+        let _ = session.apply_candidates(
             snapshot.revision,
             snapshot.candidates,
             &crate::model::Promotion::for_test(Some(indices[0]), &[]),
@@ -943,18 +976,26 @@ mod cache_tests {
                     .iter()
                     .any(|c| { c.text == "拟好" && c.source == CandidateSource::User })
             );
-            assert!(!session.apply_candidates(
-                previous.revision,
-                previous.candidates,
-                &crate::model::Promotion::for_test(None, &[])
-            ));
+            assert!(
+                session
+                    .apply_candidates(
+                        previous.revision,
+                        previous.candidates,
+                        &crate::model::Promotion::for_test(None, &[])
+                    )
+                    .is_none()
+            );
             let mut snapshot = session.snapshot();
             snapshot.include_candidates(&[candidate(text)]);
-            assert!(session.apply_candidates(
-                snapshot.revision,
-                snapshot.candidates,
-                &crate::model::Promotion::for_test(None, &[])
-            ));
+            assert!(
+                session
+                    .apply_candidates(
+                        snapshot.revision,
+                        snapshot.candidates,
+                        &crate::model::Promotion::for_test(None, &[])
+                    )
+                    .is_some()
+            );
             assert_eq!(session.candidates().len(), baseline_len + 1);
             assert_eq!((session.input(), session.cursor()), ("nihao", 5));
         }
@@ -1093,11 +1134,15 @@ mod cache_tests {
             })
             .unwrap();
         assert!(index > 0);
-        assert!(session.apply_candidates(
-            original.revision,
-            session.candidates().to_vec(),
-            &crate::model::Promotion::for_test(Some(index), &[])
-        ));
+        assert!(
+            session
+                .apply_candidates(
+                    original.revision,
+                    session.candidates().to_vec(),
+                    &crate::model::Promotion::for_test(Some(index), &[])
+                )
+                .is_some()
+        );
         let mut expected = original.candidates.clone();
         expected[..=index].rotate_right(1);
         assert_eq!(session.candidates(), expected);
@@ -1108,11 +1153,15 @@ mod cache_tests {
         assert_eq!(session.input(), original.input);
         assert_eq!(session.context(), original.context);
         assert_eq!(session.cursor(), 3);
-        assert!(!session.apply_candidates(
-            original.revision.wrapping_add(1),
-            session.candidates().to_vec(),
-            &crate::model::Promotion::for_test(Some(usize::MAX), &[])
-        ));
+        assert!(
+            session
+                .apply_candidates(
+                    original.revision.wrapping_add(1),
+                    session.candidates().to_vec(),
+                    &crate::model::Promotion::for_test(Some(usize::MAX), &[])
+                )
+                .is_none()
+        );
         assert_eq!(session.candidates(), expected);
     }
 
@@ -1121,7 +1170,7 @@ mod cache_tests {
     fn current_promotion_with_invalid_index_exposes_internal_violation() {
         let mut session = Session::new(decoder(), None);
         session.insert("ni").unwrap();
-        session.apply_candidates(
+        let _ = session.apply_candidates(
             session.revision(),
             session.candidates().to_vec(),
             &crate::model::Promotion::for_test(Some(session.candidates().len()), &[]),
@@ -1138,11 +1187,15 @@ mod cache_tests {
         }
         let previous = session.snapshot();
         session.set_context("上下文");
-        assert!(!session.apply_candidates(
-            previous.revision,
-            session.candidates().to_vec(),
-            &crate::model::Promotion::for_test(Some(0), &[])
-        ));
+        assert!(
+            session
+                .apply_candidates(
+                    previous.revision,
+                    session.candidates().to_vec(),
+                    &crate::model::Promotion::for_test(Some(0), &[])
+                )
+                .is_none()
+        );
         session.move_cursor(-3);
         session.insert("NI").unwrap();
         assert_fresh(&session);
@@ -1179,11 +1232,15 @@ mod cache_tests {
         );
         let stale = session.snapshot();
         session.reset();
-        assert!(!session.apply_candidates(
-            stale.revision,
-            session.candidates().to_vec(),
-            &crate::model::Promotion::for_test(Some(0), &[])
-        ));
+        assert!(
+            session
+                .apply_candidates(
+                    stale.revision,
+                    session.candidates().to_vec(),
+                    &crate::model::Promotion::for_test(Some(0), &[])
+                )
+                .is_none()
+        );
         assert!(session.candidates().is_empty());
     }
     #[test]
@@ -1300,11 +1357,14 @@ mod transposition_tests {
             .iter()
             .position(|c| c.text == "按" && c.consumed == 2)
             .unwrap();
-        assert!(s.apply_candidates(
-            before.revision,
-            s.candidates().to_vec(),
-            &crate::model::Promotion::for_test(Some(correction), &[])
-        ));
+        assert!(
+            s.apply_candidates(
+                before.revision,
+                s.candidates().to_vec(),
+                &crate::model::Promotion::for_test(Some(correction), &[])
+            )
+            .is_some()
+        );
         let mut expected = before.candidates;
         expected.swap(2, 3);
         assert_eq!(s.candidates, expected);
@@ -1315,11 +1375,14 @@ mod transposition_tests {
             .iter()
             .position(|c| c.text == "安" && c.consumed == 2)
             .unwrap();
-        assert!(s.apply_candidates(
-            s.revision(),
-            s.candidates().to_vec(),
-            &crate::model::Promotion::for_test(Some(correction), &[])
-        ));
+        assert!(
+            s.apply_candidates(
+                s.revision(),
+                s.candidates().to_vec(),
+                &crate::model::Promotion::for_test(Some(correction), &[])
+            )
+            .is_some()
+        );
         for learned in [false, true] {
             if learned {
                 let i = s.candidates.iter().position(|c| c.text == "安").unwrap();
@@ -1329,11 +1392,14 @@ mod transposition_tests {
             }
             let before = s.snapshot();
             let index = s.candidates.iter().position(|c| c.text == "拿").unwrap();
-            assert!(s.apply_candidates(
-                before.revision,
-                s.candidates().to_vec(),
-                &crate::model::Promotion::for_test(Some(index), &[])
-            ));
+            assert!(
+                s.apply_candidates(
+                    before.revision,
+                    s.candidates().to_vec(),
+                    &crate::model::Promotion::for_test(Some(index), &[])
+                )
+                .is_some()
+            );
             let mutable = |c: &Candidate| {
                 c.consumed == 2
                     && c.source != CandidateSource::User
@@ -1367,11 +1433,14 @@ mod transposition_tests {
         s.insert("na").unwrap();
         let original = s.snapshot();
         s.insert("q").unwrap();
-        assert!(!s.apply_candidates(
-            original.revision,
-            s.candidates().to_vec(),
-            &crate::model::Promotion::for_test(Some(0), &[])
-        ));
+        assert!(
+            s.apply_candidates(
+                original.revision,
+                s.candidates().to_vec(),
+                &crate::model::Promotion::for_test(Some(0), &[])
+            )
+            .is_none()
+        );
         let i = s
             .candidates
             .iter()
@@ -1412,11 +1481,14 @@ mod neighbor_tests {
             })
             .unwrap();
 
-        assert!(s.apply_candidates(
-            before.revision,
-            s.candidates().to_vec(),
-            &crate::model::Promotion::for_test(Some(i), &[])
-        ));
+        assert!(
+            s.apply_candidates(
+                before.revision,
+                s.candidates().to_vec(),
+                &crate::model::Promotion::for_test(Some(i), &[])
+            )
+            .is_some()
+        );
         assert_eq!(s.candidates[0].text, "拟好");
         for (old, new) in before.candidates.iter().zip(&s.candidates) {
             if old.consumed < 5
@@ -1430,11 +1502,14 @@ mod neighbor_tests {
         }
         s.reset();
         s.insert("no'haoq").unwrap();
-        assert!(!s.apply_candidates(
-            before.revision,
-            s.candidates().to_vec(),
-            &crate::model::Promotion::for_test(Some(0), &[])
-        ));
+        assert!(
+            s.apply_candidates(
+                before.revision,
+                s.candidates().to_vec(),
+                &crate::model::Promotion::for_test(Some(0), &[])
+            )
+            .is_none()
+        );
         let i = s
             .candidates
             .iter()
@@ -1486,11 +1561,14 @@ mod missing_letter_tests {
             })
             .unwrap();
 
-        assert!(s.apply_candidates(
-            before.revision,
-            s.candidates().to_vec(),
-            &crate::model::Promotion::for_test(Some(i), &[])
-        ));
+        assert!(
+            s.apply_candidates(
+                before.revision,
+                s.candidates().to_vec(),
+                &crate::model::Promotion::for_test(Some(i), &[])
+            )
+            .is_some()
+        );
         assert_eq!(s.candidates[0].text, "拟好");
         for (a, b) in before.candidates.iter().zip(&s.candidates) {
             if a.consumed < 4
@@ -1503,11 +1581,14 @@ mod missing_letter_tests {
             }
         }
         s.insert("q").unwrap();
-        assert!(!s.apply_candidates(
-            before.revision,
-            s.candidates().to_vec(),
-            &crate::model::Promotion::for_test(Some(0), &[])
-        ));
+        assert!(
+            s.apply_candidates(
+                before.revision,
+                s.candidates().to_vec(),
+                &crate::model::Promotion::for_test(Some(0), &[])
+            )
+            .is_none()
+        );
         let i = s
             .candidates
             .iter()
@@ -1533,11 +1614,14 @@ mod missing_letter_tests {
                     && c.source != CandidateSource::Completion
             })
             .unwrap();
-        assert!(s.apply_candidates(
-            before.revision,
-            s.candidates().to_vec(),
-            &crate::model::Promotion::for_test(Some(index), &[])
-        ));
+        assert!(
+            s.apply_candidates(
+                before.revision,
+                s.candidates().to_vec(),
+                &crate::model::Promotion::for_test(Some(index), &[])
+            )
+            .is_some()
+        );
         assert_eq!(s.candidates[0], before.candidates[0]);
         s.reset();
         s.insert("nihao").unwrap();
@@ -1674,11 +1758,14 @@ mod explicit_boundary_tests {
             .rposition(|c| c.consumed == 6 && c.source != CandidateSource::Completion)
             .unwrap();
         assert!(index > 0);
-        assert!(s.apply_candidates(
-            s.revision(),
-            s.candidates().to_vec(),
-            &crate::model::Promotion::for_test(Some(index), &[])
-        ));
+        assert!(
+            s.apply_candidates(
+                s.revision(),
+                s.candidates().to_vec(),
+                &crate::model::Promotion::for_test(Some(index), &[])
+            )
+            .is_some()
+        );
         assert!(s.candidates().iter().any(|c| c == &before[partial]));
         let index = s
             .candidates()

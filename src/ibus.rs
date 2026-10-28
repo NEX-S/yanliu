@@ -190,23 +190,14 @@ impl RankJob {
             Err(error) => return Err(error),
         };
         let mut engine = interface.get_mut().await;
-        if self.current() {
-            let changed = promotion.index.is_some()
-                || !promotion
-                    .order
-                    .iter()
-                    .copied()
-                    .filter(|&index| index != 0)
-                    .is_sorted()
-                || self.snapshot.candidates != engine.session.candidates();
-            if engine.session.apply_candidates(
+        if self.current()
+            && engine.session.apply_candidates(
                 self.snapshot.revision,
                 self.snapshot.candidates,
                 promotion,
-            ) && changed
-            {
-                engine.publish(&self.emitter).await?;
-            }
+            ) == Some(true)
+        {
+            engine.publish(&self.emitter).await?;
         }
         Ok(())
     }
@@ -1428,7 +1419,7 @@ mod tests {
         type_text(&proxy, "ni").await;
         barrier(&mut signals, engine.signal_emitter()).await;
         let candidates = engine.get().await.session.candidates().to_vec();
-        let mut promotion = Promotion::for_test(None, &[0, 1, 2]);
+        let mut promotion = Promotion::for_test(Some(0), &[0, 1, 2]);
         promotion.feedback = true;
         promotion.scores = [-1.0, -1.2, -20.0]
             .into_iter()
@@ -1911,11 +1902,18 @@ mod tests {
                         .any(|message| member(message) == "UpdateLookupTable")
                 );
                 assert_eq!(engine.get().await.cursor, 0);
-                assert!(!engine.get_mut().await.session.apply_candidates(
-                    before.revision,
-                    before.candidates,
-                    &crate::model::Promotion::for_test(Some(1), &[])
-                ));
+                assert!(
+                    engine
+                        .get_mut()
+                        .await
+                        .session
+                        .apply_candidates(
+                            before.revision,
+                            before.candidates,
+                            &crate::model::Promotion::for_test(Some(1), &[])
+                        )
+                        .is_none()
+                );
                 Some(take_job(&queue))
             } else {
                 assert!(updates.is_empty());
@@ -2184,7 +2182,11 @@ mod tests {
             .refine(&mut snapshot, &decoder, || true)
             .unwrap()
             .unwrap();
-        assert!(expected.apply_candidates(snapshot.revision, snapshot.candidates, &promotion));
+        assert!(
+            expected
+                .apply_candidates(snapshot.revision, snapshot.candidates, &promotion)
+                .is_some()
+        );
         assert_eq!(expected.candidates()[0].text, "西安");
         let mut session = Session::new(decoder, Some(learning));
         session.set_context("我去");

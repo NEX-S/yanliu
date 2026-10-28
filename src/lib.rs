@@ -34,7 +34,11 @@ mod tests {
             .refine(&mut snapshot, decoder, || true)
             .unwrap()
             .unwrap();
-        assert!(session.apply_candidates(snapshot.revision, snapshot.candidates, &result));
+        assert!(
+            session
+                .apply_candidates(snapshot.revision, snapshot.candidates, &result)
+                .is_some()
+        );
     }
     #[test]
     fn composes_unlisted_sentence_and_completes_tail() {
@@ -267,11 +271,14 @@ mod tests {
         assert!(s.backspace());
         assert_eq!(s.input(), "niha");
         let current = s.candidates().to_vec();
-        assert!(!s.apply_candidates(
-            old.revision,
-            old.candidates,
-            &crate::model::Promotion::for_test(Some(usize::MAX), &[])
-        ));
+        assert!(
+            s.apply_candidates(
+                old.revision,
+                old.candidates,
+                &crate::model::Promotion::for_test(Some(usize::MAX), &[])
+            )
+            .is_none()
+        );
         assert_eq!(s.candidates(), current);
         s.move_cursor(-2);
         assert!(s.delete_forward());
@@ -281,11 +288,14 @@ mod tests {
         assert!(s.input().is_empty());
         assert!(s.candidates().is_empty());
         assert!(s.context().is_empty());
-        assert!(!s.apply_candidates(
-            old.revision,
-            old.candidates,
-            &crate::model::Promotion::for_test(Some(usize::MAX), &[])
-        ));
+        assert!(
+            s.apply_candidates(
+                old.revision,
+                old.candidates,
+                &crate::model::Promotion::for_test(Some(usize::MAX), &[])
+            )
+            .is_none()
+        );
         assert!(s.candidates().is_empty());
     }
     #[test]
@@ -544,11 +554,15 @@ mod tests {
         assert_eq!(session.input(), &stale.input[consumed..]);
         assert!(!session.input().is_empty());
         assert_eq!(bits(&session), bits(&typed));
-        assert!(!session.apply_candidates(
-            stale.revision,
-            stale.candidates,
-            &crate::model::Promotion::for_test(Some(usize::MAX), &[])
-        ));
+        assert!(
+            session
+                .apply_candidates(
+                    stale.revision,
+                    stale.candidates,
+                    &crate::model::Promotion::for_test(Some(usize::MAX), &[])
+                )
+                .is_none()
+        );
         assert_eq!(bits(&session), bits(&typed));
     }
 
@@ -597,11 +611,15 @@ mod tests {
         let snap = session.snapshot();
         session.insert("a").unwrap();
         let current = session.candidates().to_vec();
-        assert!(!session.apply_candidates(
-            snap.revision,
-            snap.candidates,
-            &crate::model::Promotion::for_test(Some(usize::MAX), &[])
-        ));
+        assert!(
+            session
+                .apply_candidates(
+                    snap.revision,
+                    snap.candidates,
+                    &crate::model::Promotion::for_test(Some(usize::MAX), &[])
+                )
+                .is_none()
+        );
         assert_eq!(session.candidates(), current);
     }
 }

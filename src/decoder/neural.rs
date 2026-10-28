@@ -224,14 +224,12 @@ impl Decoder {
         let n = input.key.len();
         let mut arcs: Vec<Vec<Edge>> = (0..=n).map(|_| Vec::new()).collect();
         let mut longest = vec![0; n + 1];
-        let mut reachable = vec![false; n + 1];
-        reachable[n] = true;
         for start in (0..n).rev() {
             let Some(maximum) = self.dictionary.longest_syllable(&input.key[start..]) else {
                 continue;
             };
             for end in start + 1..=start + maximum {
-                if !reachable[end] {
+                if end != n && longest[end] == 0 {
                     continue;
                 }
                 let mut seen = HashSet::new();
@@ -253,7 +251,6 @@ impl Decoder {
                         weight: entry.weight,
                     });
                     longest[start] = longest[start].max(longest[end] + 1);
-                    reachable[start] = true;
                 }
             }
         }

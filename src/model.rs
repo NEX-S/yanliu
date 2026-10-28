@@ -637,11 +637,15 @@ mod tests {
         );
         let index = decision.index.unwrap();
         assert_eq!(snapshot.candidates[index].text, "西安");
-        assert!(session.apply_candidates(
-            snapshot.revision,
-            snapshot.candidates,
-            &crate::model::Promotion::for_test(Some(index), &decision.order)
-        ));
+        assert!(
+            session
+                .apply_candidates(
+                    snapshot.revision,
+                    snapshot.candidates,
+                    &crate::model::Promotion::for_test(Some(index), &decision.order)
+                )
+                .is_some()
+        );
         assert_eq!(session.candidates()[0].text, "西安");
     }
 
@@ -666,7 +670,11 @@ mod tests {
                     .refine(&mut snapshot, &decoder, || true)
                     .unwrap()
                     .unwrap();
-                assert!(session.apply_candidates(snapshot.revision, snapshot.candidates, &result));
+                assert!(
+                    session
+                        .apply_candidates(snapshot.revision, snapshot.candidates, &result)
+                        .is_some()
+                );
                 assert_eq!(session.candidates()[0].text, "开源");
             }
         }
@@ -700,7 +708,11 @@ mod tests {
             .refine(&mut snapshot, &decoder, || true)
             .unwrap()
             .unwrap();
-        assert!(session.apply_candidates(snapshot.revision, snapshot.candidates, &result));
+        assert!(
+            session
+                .apply_candidates(snapshot.revision, snapshot.candidates, &result)
+                .is_some()
+        );
         assert_eq!(session.candidates()[0].text, "B站");
         assert_eq!(session.candidates()[0].source, CandidateSource::User);
     }
@@ -990,7 +1002,11 @@ mod tests {
             .refine(&mut snapshot, &decoder, || true)
             .unwrap()
             .unwrap();
-        assert!(session.apply_candidates(snapshot.revision, snapshot.candidates, &result));
+        assert!(
+            session
+                .apply_candidates(snapshot.revision, snapshot.candidates, &result)
+                .is_some()
+        );
         assert_eq!(session.candidates()[0].text, "㨎");
         assert_eq!(session.candidates()[0].source, CandidateSource::User);
     }
