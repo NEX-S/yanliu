@@ -1,0 +1,105 @@
+yanliu-7m-v4
+
+Copyright 2026 Yanliu contributors
+
+选定权重包含明确授权的本地助手中文，原始对话与训练正文不发布；保留 private-derived 分类、来源条件和原始元数据，没有匿名化或不记忆保证。
+
+公共文件固定下载 URL、SHA-256、训练来源与数据配方哈希见 provenance.json。
+
+naturalconv
+
+Wang et al. (2021), NaturalConv: A Chinese Dialogue Dataset Towards Multi-turn Topic-driven Conversation; https://arxiv.org/abs/2103.02548
+
+{'platform': 'huggingface', 'id': 'xywang1/NaturalConv', 'url': 'https://huggingface.co/datasets/xywang1/NaturalConv'}
+
+adb38574e8014ada1d8404247167582e76b22d05
+
+https://huggingface.co/datasets/xywang1/NaturalConv/tree/adb38574e8014ada1d8404247167582e76b22d05
+
+not declared in dataset card; retain original source
+
+https://huggingface.co/datasets/xywang1/NaturalConv/blob/adb38574e8014ada1d8404247167582e76b22d05/LICENSE
+
+Section 3 limits uses to personal/non-commercial research, development, testing and specified academic/event uses; section 4 restricts dataset and derivative-work distribution and other uses. The old cache's no-license-in-card wording is incomplete.
+
+cped
+
+Chen et al. (2022), CPED: A Large-Scale Chinese Personalized and Emotional Dialogue Dataset for Conversational AI; text only, no speaker or visual annotations
+
+{'platform': 'github', 'id': 'scutcyr/CPED', 'url': 'https://github.com/scutcyr/CPED'}
+
+1e4b81c28a123f22387e06664f37e5dc9322380f
+
+https://github.com/scutcyr/CPED/tree/1e4b81c28a123f22387e06664f37e5dc9322380f
+
+Apache-2.0 repository license; original TV dialogue source retained
+
+https://raw.githubusercontent.com/scutcyr/CPED/1e4b81c28a123f22387e06664f37e5dc9322380f/LICENSE
+
+lccc
+
+Wang, Yida et al. (2020), A Large-Scale Chinese Short-Text Conversation Dataset, NLPCC; https://arxiv.org/abs/2008.03946
+
+{'platform': 'huggingface', 'id': 'thu-coai/lccc', 'url': 'https://huggingface.co/datasets/thu-coai/lccc'}
+
+81d998c10513b24cd560be3448d693e80d753fdc
+
+https://huggingface.co/datasets/thu-coai/lccc/raw/9022ba27075f75c2f59d57d7fa5f42e8d1151aec/README.md
+
+MIT
+
+wiki
+
+Wikimedia Wikipedia 2023-11-01 Chinese dump; original article id/url/title retained in raw Parquet
+
+{'platform': 'huggingface', 'id': 'wikimedia/wikipedia', 'url': 'https://huggingface.co/datasets/wikimedia/wikipedia'}
+
+b04c8d1ceb2f5cd4588862100d08de323dccfbaa
+
+https://huggingface.co/datasets/wikimedia/wikipedia/raw/b04c8d1ceb2f5cd4588862100d08de323dccfbaa/README.md
+
+CC-BY-SA-3.0 and GFDL (version not specified in card)
+
+cqia
+
+Bai, Yuelin et al. (2024), COIG-CQIA: Quality is All You Need for Chinese Instruction Fine-tuning; https://arxiv.org/abs/2403.18058
+
+{'platform': 'huggingface', 'id': 'm-a-p/COIG-CQIA', 'url': 'https://huggingface.co/datasets/m-a-p/COIG-CQIA'}
+
+8b55868c6168adf86c30e7ca0f782cca1c514297
+
+https://huggingface.co/datasets/m-a-p/COIG-CQIA/raw/8b55868c6168adf86c30e7ca0f782cca1c514297/README.md
+
+More Information Needed; no unified license declared; per-row copyright retained in raw JSONL
+
+tnews
+
+Xu, Liang et al. (2020), CLUE: A Chinese Language Understanding Evaluation Benchmark; https://arxiv.org/abs/2004.05986
+
+{'platform': 'huggingface', 'id': 'clue/clue', 'url': 'https://huggingface.co/datasets/clue/clue'}
+
+28178267a609dd08bdc703dd6c931dfc2c2f4431
+
+https://huggingface.co/datasets/clue/clue/raw/28178267a609dd08bdc703dd6c931dfc2c2f4431/README.md
+
+unknown
+
+edu
+
+OpenCSG / Fineweb-Edu-Chinese contributors
+
+a5b574efa48beb3a8f6887ef0b093becf004328b
+
+https://huggingface.co/datasets/opencsg/Fineweb-Edu-Chinese-V2.1/blob/a5b574efa48beb3a8f6887ef0b093becf004328b/README.md
+
+Card metadata: apache-2.0. Body additionally requires OpenCSG Community License and permission for commercial use; both retained.
+
+合成案例：公开中文案例由 llmux/deepseek-flash 生成并整理；保留生成服务输出条件及原始来源署名。
+
+Rime Ice：iDvel 及上游词典贡献者，GPL-3.0；版本 da1fbe602e38f26db846fa10120ee64c2b0324c0；https://github.com/iDvel/rime-ice/tree/da1fbe602e38f26db846fa10120ee64c2b0324c0/cn_dicts
+
+base.dict.yaml SHA-256: 0418d5103d8e40c8fff4b686a873ad03e9836cd0419ecae0b7e1e2526312dba0
+
+自动拼音注音并非人工金标。
+
+Tatoeba 既有诊断来源：Tatoeba contributors，CC BY 2.0 FR；https://tatoeba.org/ ；https://creativecommons.org/licenses/by/2.0/fr/ 。诊断原文不随包发布。

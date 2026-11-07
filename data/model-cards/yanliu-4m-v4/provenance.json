@@ -1,0 +1,499 @@
+{
+  "format": "yanliu-model-provenance-v4",
+  "name": "yanliu-4m-v4",
+  "publication": {
+    "release": "models-v4",
+    "role": "optional prerelease; models-v2 4M remains default",
+    "date": "2026-11-07",
+    "user_authorized_public_weight_publication": true,
+    "unified_model_license_declared": false
+  },
+  "model": {
+    "file": "sentence-model.safetensors",
+    "bytes": 4735000,
+    "sha256": "82cb92cad452072852a6a31df090b331877e98d2535cfe7b3ce05e08f9388b5e",
+    "parameters": 4478592,
+    "config": {
+      "vocab": 9358,
+      "n_layer": 6,
+      "n_head": 4,
+      "n_embd": 192,
+      "context": 64,
+      "dropout": 0.1
+    },
+    "quantization": "Per-row symmetric INT8 for two-dimensional weights except pos.weight; FP32 scales and remaining tensors.",
+    "embedded_metadata": "Preserved unchanged, including historical local paths and private-derived labels.",
+    "data_classification": "private: includes explicitly authorized local Claude/Codex/Grok assistant text",
+    "license": "Mixed source conditions retained; private assistant-derived research weights"
+  },
+  "ancestry": {
+    "initial_fp32_parent": {
+      "sha256": "be480d9aec0e9de4c48f35899756027d4d8a347ffa5d92656965eaa88f8d5afc",
+      "role": "Own historical real FP32 checkpoint; not dequantized from INT8."
+    },
+    "continued_fp32_parent": {
+      "sha256": "cbe232e3a2eddd7cd9a890313d7dbb88a5178d9a540d75a16438a9996ee39808",
+      "role": "Actual immediate ranker parent. Embedded top-level parent_model_path is historical and must not be paired with this hash."
+    }
+  },
+  "training": {
+    "effective_pretraining_targets": 100000000,
+    "pretraining_optimizer_updates": 24490,
+    "learning_rate": 1e-05,
+    "seed": 20261104,
+    "pretraining_batch": 64,
+    "runtime": {
+      "device": "xpu",
+      "precision": "bf16",
+      "attention_backend": "math",
+      "name": "Intel(R) Arc(TM) B390 GPU",
+      "parameter_dtype": "float32",
+      "deterministic_algorithms": false
+    },
+    "text_dev_cross_entropy": 3.7328627564318517,
+    "ranking_completed_epochs": 3,
+    "selected_ranking_epoch": 0,
+    "selected_additional_optimizer_updates": 0,
+    "selection": "actual CLI int8 development group-mean top1; ties choose earliest epoch",
+    "selected_group_top1_fraction": [
+      9429341,
+      12977580
+    ],
+    "ranking_loss": "mean supervised group loss (source-top1 retention hinge, otherwise real-menu rank CE; missing-target suffix CE) + mean effective-token KL(frozen_source_teacher || student), T=1; fixed coefficient 1 for each",
+    "training_binary_sha256": "a986de8fa2108745897caf7edb252767c1d6d5857f184feea108d322f9566364",
+    "source_sha256": {
+      "src/bin/yanliu/evaluate.rs": "5d70dcded683ef0be1dbee4dd96e63f19976c573a2a7f9aa1ec5d9840a76e266",
+      "src/bin/yanliu/learning_replay.rs": "4981b68766944b3833d525ef3c235e7237bb9fb1a747ad0bc5ca7bb1460a6fb0",
+      "src/bin/yanliu-ibus/config.rs": "08665603ba54d9aa1ff8e5042012540a3e6e5e1de36fc5ef63ad124df5df7ed1",
+      "src/bin/yanliu-ibus.rs": "257e7c9b93ae7fa32fbd795aa0d4ca05879f2c8f28173b25a3ff402236dbf529",
+      "src/bin/yanliu.rs": "d0faaabba70d908b19c3c2bc64e9872b1107fa7ccd51027da6cc32d10bdd107f",
+      "src/decoder/neural.rs": "84c33f66ee26d634f6094b0cc564f7c8976816b6c2cb0407eeac35cde79eb709",
+      "src/decoder.rs": "ba4d8abd3417a8ebf5a8fc35558db4fab0a5c5ce7fc5b6789a075b66b9e9402f",
+      "src/dictionary.rs": "cd70e54ad070a8d2d92049f1998f2d88c2aca455434a75c52594831938740e74",
+      "src/ibus.rs": "27acc08ff4278a6071e0445bcb01dc030d9e8320f5d0f8abd025f98fb3604ce6",
+      "src/learning.rs": "67d5c714534702b3ea2bf75c2ed63c2c30c09ac6a4641355db26c5bf860928ab",
+      "src/lib.rs": "b759b82b32ef02757d09ffa6fac4af2cadd9dfef7ead4bf9da1adc428553bc59",
+      "src/model/openvino.rs": "b77c4239198ec1755c53b368b31406bd8193d49df141501db96c07494f8d32a8",
+      "src/model.rs": "d0d8a1e15aab3e122a996f9c61dd471c420d4579fc239064cda84f75d73bf0c4",
+      "src/session.rs": "fe4d279595d50bd4d29879741ac477fb1f42037011870ae6db2c6d0a6ca99d50",
+      "vendor/chinese-ime-lm/src/lib.rs": "5c3cbf02a80f5e0639b41f4d2e2748932b9b059275140bf56d5cf00559034b59",
+      "vendor/chinese-ime-lm/src/weights.rs": "caf8b5e3ee988bbec2478e034243608719cc29fcbe398499d00d454943f40109",
+      "Cargo.toml": "942ccbef87b870f5d33504d1bbcf461216cc928c7fd08afdc9fa662d69868f4d",
+      "Cargo.lock": "4c73f490cbe0ef49dc4788bf4fae45b7422fd2c5f2cf5ea417d19e3f588126fd",
+      "scripts/train_ranker.py": "c968cc57941149125e12186e41884067304098b0fdf121f0605713fac2d34ad1",
+      "scripts/pretrain_model.py": "ec2168e95fdedee16734ad5ceafeaca544401e29abc7e6d1a8956fa172787483",
+      "scripts/training-requirements.txt": "d41e9c63347f5e6bba9bc2b71b48f39b6675a6a595c07684fc667aada069eeb1",
+      "vendor/chinese-ime-training/neural/model.py": "0b7fb41aa8a4356fa7757aa1b9e84d5022fa33a5436e695dcc1116b0d34c1f9b",
+      "vendor/chinese-ime-training/neural/initialize.py": "160af2dc697660b74ab74031283f768c9ec26fb14ed54d4ed979ab49f9ae2de5"
+    },
+    "system_learning_used": false
+  },
+  "data": {
+    "classification": "private-derived; public mixed sources plus explicitly authorized local assistant Chinese",
+    "train_characters": 76786854,
+    "train_characters_by_source": {
+      "edu": 14999998,
+      "cqia": 8321204,
+      "naturalconv": 1978868,
+      "claude": 1246882,
+      "codex": 4999019,
+      "grok": 464812,
+      "synthetic": 2911902,
+      "lccc": 14999998,
+      "wiki": 25000000,
+      "cped": 864171,
+      "tnews": 1000000
+    },
+    "ranking_rows": {
+      "train": 260625,
+      "development": 3609,
+      "holdout": 583
+    },
+    "split_policy": "Document/conversation grouping, exact/near dedup and evaluation-fragment exclusion for this continuation; historical parent membership not established.",
+    "output_sha256": {
+      "train.txt": "bb317c7a98202281a3992ac9b5838d89909a38f20d24a424c606885e10dbfad6",
+      "dev.txt": "92644d6888ea6c9d1652d74a592e51f101a4b8bc2e2515faaa4b8a72c1449602",
+      "holdout.txt": "47c3d5b76d8ffbfaf2c77c72312dd31ec43a2e3e946cc29b3cd179435423cb00",
+      "documents.jsonl": "07b0e1e348ce5d85a2e459187dcfb004b265820f628ef4dc2af445c7c2133695",
+      "ranking-train.jsonl": "28a17f88af94c7e289dc2e09539afaaeafc19c4ade8f7bca0dba76c06aa0a963",
+      "ranking-dev.jsonl": "70b555e0cae86e5bd531ba328912183b4f045d3f541a8e23ef3e2d0e43d95e02",
+      "ranking-holdout.jsonl": "ea7d3e15a4fcfa202a39b4e83fb1c3a508a13307aa2a9100943f334749aba1e1"
+    },
+    "executed_preparation_source_sha256": {
+      "prepare_general_corpus.py": "b833f62ad3954df0bf2253032e9742f806f788c86c86d6d76f38f4d252bad0f3",
+      "build_ranking_corpus.py": "e9a91b56df5d6d1de3d27607321d8678f36cec781f42d19d934ad11c8be17045",
+      "prepare_small_corpus.py": "46af5877502e533b0b8e3d3e1435b69e9f0860364d2a6e25d5ab206905ebfab3"
+    },
+    "original_corpus_manifest_sha256": "1807f66140a62412fa4be0272ad29e1101a3d82fb4be99df37b34b0fa6819910",
+    "pinyin_phrases_sha256": "f6b1c09abb5e57deca11001a0e8c82e19cbff64a606b29eddcd3ac3214d04927",
+    "runtime_dictionary_sha256": {
+      "8105.dict.yaml": "398eb4c826cb3cfa4a2fc7d8d07bd3f2a76d2d07133c4a96ee79b90d22355916",
+      "base.dict.yaml": "0418d5103d8e40c8fff4b686a873ad03e9836cd0419ecae0b7e1e2526312dba0",
+      "ext.dict.yaml": "7d2fd8886c099119c651a9306c2f61f07a8967e4f785587b84da45affdd71a54"
+    },
+    "public_sources": [
+      {
+        "source": "naturalconv",
+        "repository": {
+          "platform": "huggingface",
+          "id": "xywang1/NaturalConv",
+          "url": "https://huggingface.co/datasets/xywang1/NaturalConv"
+        },
+        "revision": "adb38574e8014ada1d8404247167582e76b22d05",
+        "declared_license": "not declared in dataset card; retain original source",
+        "data_card": "https://huggingface.co/datasets/xywang1/NaturalConv/tree/adb38574e8014ada1d8404247167582e76b22d05",
+        "citation": "Wang et al. (2021), NaturalConv: A Chinese Dialogue Dataset Towards Multi-turn Topic-driven Conversation; https://arxiv.org/abs/2103.02548",
+        "files": [
+          {
+            "filename": "naturalconv-dialog.json",
+            "url": "https://huggingface.co/datasets/xywang1/NaturalConv/resolve/adb38574e8014ada1d8404247167582e76b22d05/dialog_release.json",
+            "bytes": 51726524,
+            "sha256": "0aed101b0f295f87da8d27c3fb4eb62955488b7116c9a9c63c929f65656c195a"
+          }
+        ],
+        "license_url": "https://huggingface.co/datasets/xywang1/NaturalConv/blob/adb38574e8014ada1d8404247167582e76b22d05/LICENSE",
+        "license_sha256": "b51724699c7602950328471609ef586995eb7ecb870a93bc45eea79cd1a9946e",
+        "conditions": "Section 3 limits uses to personal/non-commercial research, development, testing and specified academic/event uses; section 4 restricts dataset and derivative-work distribution and other uses. The old cache's no-license-in-card wording is incomplete."
+      },
+      {
+        "source": "cped",
+        "repository": {
+          "platform": "github",
+          "id": "scutcyr/CPED",
+          "url": "https://github.com/scutcyr/CPED"
+        },
+        "revision": "1e4b81c28a123f22387e06664f37e5dc9322380f",
+        "declared_license": "Apache-2.0 repository license; original TV dialogue source retained",
+        "data_card": "https://github.com/scutcyr/CPED/tree/1e4b81c28a123f22387e06664f37e5dc9322380f",
+        "citation": "Chen et al. (2022), CPED: A Large-Scale Chinese Personalized and Emotional Dialogue Dataset for Conversational AI; text only, no speaker or visual annotations",
+        "license_url": "https://raw.githubusercontent.com/scutcyr/CPED/1e4b81c28a123f22387e06664f37e5dc9322380f/LICENSE",
+        "files": [
+          {
+            "filename": "cped-train.csv",
+            "url": "https://raw.githubusercontent.com/scutcyr/CPED/1e4b81c28a123f22387e06664f37e5dc9322380f/data/CPED/train_split.csv",
+            "bytes": 13993864,
+            "sha256": "7bce6a11f0bf0ac353d28e96f6cfa03ff5e83b95810647abb55d18ff7299e487"
+          },
+          {
+            "filename": "cped-valid.csv",
+            "url": "https://raw.githubusercontent.com/scutcyr/CPED/1e4b81c28a123f22387e06664f37e5dc9322380f/data/CPED/valid_split.csv",
+            "bytes": 1672923,
+            "sha256": "f434a04d21640bb38c849f3e9598c2b7b2fbdb49be6a7365b2ae016019bd389b"
+          },
+          {
+            "filename": "cped-test.csv",
+            "url": "https://raw.githubusercontent.com/scutcyr/CPED/1e4b81c28a123f22387e06664f37e5dc9322380f/data/CPED/test_split.csv",
+            "bytes": 4137142,
+            "sha256": "a4bcde678438ba1f95224d8e772e40f1f1df7c72f348796b3fafd421c2443a53"
+          }
+        ]
+      },
+      {
+        "source": "lccc",
+        "repository": {
+          "platform": "huggingface",
+          "id": "thu-coai/lccc",
+          "url": "https://huggingface.co/datasets/thu-coai/lccc"
+        },
+        "revision": "81d998c10513b24cd560be3448d693e80d753fdc",
+        "declared_license": "MIT",
+        "data_card": "https://huggingface.co/datasets/thu-coai/lccc/raw/9022ba27075f75c2f59d57d7fa5f42e8d1151aec/README.md",
+        "citation": "Wang, Yida et al. (2020), A Large-Scale Chinese Short-Text Conversation Dataset, NLPCC; https://arxiv.org/abs/2008.03946",
+        "files": [
+          {
+            "filename": "lccc-train-00000.parquet",
+            "url": "https://huggingface.co/datasets/thu-coai/lccc/resolve/81d998c10513b24cd560be3448d693e80d753fdc/base/lccc-train-00000-of-00002.parquet",
+            "bytes": 339463404,
+            "sha256": "1e8bbfff077ec1a7c74672d156f93b1d443ed8f240383ac3a317eb2afa6a5e5f"
+          }
+        ]
+      },
+      {
+        "source": "wiki",
+        "repository": {
+          "platform": "huggingface",
+          "id": "wikimedia/wikipedia",
+          "url": "https://huggingface.co/datasets/wikimedia/wikipedia"
+        },
+        "revision": "b04c8d1ceb2f5cd4588862100d08de323dccfbaa",
+        "declared_license": "CC-BY-SA-3.0 and GFDL (version not specified in card)",
+        "data_card": "https://huggingface.co/datasets/wikimedia/wikipedia/raw/b04c8d1ceb2f5cd4588862100d08de323dccfbaa/README.md",
+        "citation": "Wikimedia Wikipedia 2023-11-01 Chinese dump; original article id/url/title retained in raw Parquet",
+        "files": [
+          {
+            "filename": "wiki-train-00000.parquet",
+            "url": "https://huggingface.co/datasets/wikimedia/wikipedia/resolve/b04c8d1ceb2f5cd4588862100d08de323dccfbaa/20231101.zh/train-00000-of-00006.parquet",
+            "bytes": 587109027,
+            "sha256": "853ddf4a138c792ad7386d6de831788f96326c03e1e3349f7a315498392e8b56"
+          },
+          {
+            "filename": "wiki-train-00002.parquet",
+            "url": "https://huggingface.co/datasets/wikimedia/wikipedia/resolve/b04c8d1ceb2f5cd4588862100d08de323dccfbaa/20231101.zh/train-00002-of-00006.parquet",
+            "bytes": 126796358,
+            "sha256": "ec8f6c0dd1418b8fcd454278fb4f2bc7cd0ce8312f29c80b672533942601338f"
+          }
+        ]
+      },
+      {
+        "source": "cqia",
+        "repository": {
+          "platform": "huggingface",
+          "id": "m-a-p/COIG-CQIA",
+          "url": "https://huggingface.co/datasets/m-a-p/COIG-CQIA"
+        },
+        "revision": "8b55868c6168adf86c30e7ca0f782cca1c514297",
+        "declared_license": "More Information Needed; no unified license declared; per-row copyright retained in raw JSONL",
+        "data_card": "https://huggingface.co/datasets/m-a-p/COIG-CQIA/raw/8b55868c6168adf86c30e7ca0f782cca1c514297/README.md",
+        "citation": "Bai, Yuelin et al. (2024), COIG-CQIA: Quality is All You Need for Chinese Instruction Fine-tuning; https://arxiv.org/abs/2403.18058",
+        "files": [
+          {
+            "filename": "cqia-zhihu9.jsonl",
+            "url": "https://huggingface.co/datasets/m-a-p/COIG-CQIA/resolve/8b55868c6168adf86c30e7ca0f782cca1c514297/zhihu/zhihu_score9.0-10_clean_v10.jsonl",
+            "bytes": 7364243,
+            "sha256": "3263b3c24c94bdb6ad3b9b547594aa1b5c4d3786fa456780c893af28ca86ab20"
+          },
+          {
+            "filename": "cqia-zhihu85.jsonl",
+            "url": "https://huggingface.co/datasets/m-a-p/COIG-CQIA/resolve/8b55868c6168adf86c30e7ca0f782cca1c514297/zhihu/zhihu_score8.5-9.0_clean_v4.jsonl",
+            "bytes": 3346303,
+            "sha256": "86e277a63251c019a11360274e76c0d0b0e76b5b2559d7d7fb1a5273e6b4ffa4"
+          },
+          {
+            "filename": "cqia-zhihu8.jsonl",
+            "url": "https://huggingface.co/datasets/m-a-p/COIG-CQIA/resolve/8b55868c6168adf86c30e7ca0f782cca1c514297/zhihu/zhihu_score8.0-8.5_clean_v3.jsonl",
+            "bytes": 3236988,
+            "sha256": "2dd9954e8ad41eee9b0c0823938f299472779b0757234a237c56f83d1fac6a86"
+          },
+          {
+            "filename": "cqia-wikihow.jsonl",
+            "url": "https://huggingface.co/datasets/m-a-p/COIG-CQIA/resolve/8b55868c6168adf86c30e7ca0f782cca1c514297/wikihow/wikihow.jsonl",
+            "bytes": 11519024,
+            "sha256": "ec172b8616c589bc28b5be5c77ae4b0659e401184848127517bc8352497d57ca"
+          },
+          {
+            "filename": "cqia-zgbk.jsonl",
+            "url": "https://huggingface.co/datasets/m-a-p/COIG-CQIA/resolve/8b55868c6168adf86c30e7ca0f782cca1c514297/wiki/zgbk.jsonl",
+            "bytes": 5653878,
+            "sha256": "d1e3dac5eeb90541dbe39a20629eb2e5f7315f19796da7bba308b92e905591ed"
+          },
+          {
+            "filename": "cqia-book-introduce.jsonl",
+            "url": "https://huggingface.co/datasets/m-a-p/COIG-CQIA/resolve/8b55868c6168adf86c30e7ca0f782cca1c514297/douban/book_introduce.jsonl",
+            "bytes": 718502,
+            "sha256": "3fb7401db5a8d21423ce8befabfd22ed67e9d43d73d88504f20fe471bf463e0b"
+          },
+          {
+            "filename": "cqia-book-reviews.jsonl",
+            "url": "https://huggingface.co/datasets/m-a-p/COIG-CQIA/resolve/8b55868c6168adf86c30e7ca0f782cca1c514297/douban/book_reviews.jsonl",
+            "bytes": 464357,
+            "sha256": "c72d6b7c88f233846aeda9576dc0c1a9d7cc1e0b5e4e5626e7fa4408c7352648"
+          },
+          {
+            "filename": "cqia-movie-reviews.jsonl",
+            "url": "https://huggingface.co/datasets/m-a-p/COIG-CQIA/resolve/8b55868c6168adf86c30e7ca0f782cca1c514297/douban/movie_reviews.jsonl",
+            "bytes": 918882,
+            "sha256": "60ba054a3973e9301316efaa1525b27202e5dc8ef5c6878acc9813c067c13336"
+          },
+          {
+            "filename": "cqia-tv-reviews.jsonl",
+            "url": "https://huggingface.co/datasets/m-a-p/COIG-CQIA/resolve/8b55868c6168adf86c30e7ca0f782cca1c514297/douban/tv_reviews.jsonl",
+            "bytes": 686151,
+            "sha256": "db5cb354a8db1447d54ce2878b5b114e52b3fd02707e4b1c622d4dad6f52bc57"
+          }
+        ]
+      },
+      {
+        "source": "tnews",
+        "repository": {
+          "platform": "huggingface",
+          "id": "clue/clue",
+          "url": "https://huggingface.co/datasets/clue/clue"
+        },
+        "revision": "28178267a609dd08bdc703dd6c931dfc2c2f4431",
+        "declared_license": "unknown",
+        "data_card": "https://huggingface.co/datasets/clue/clue/raw/28178267a609dd08bdc703dd6c931dfc2c2f4431/README.md",
+        "citation": "Xu, Liang et al. (2020), CLUE: A Chinese Language Understanding Evaluation Benchmark; https://arxiv.org/abs/2004.05986",
+        "files": [
+          {
+            "filename": "tnews-train.parquet",
+            "url": "https://huggingface.co/datasets/clue/clue/resolve/28178267a609dd08bdc703dd6c931dfc2c2f4431/tnews/train-00000-of-00001.parquet",
+            "bytes": 3399930,
+            "sha256": "57ad8b1a5a6a4120a283468f5a828a2702b742139a1878e1edcd7b8b59eec5de"
+          }
+        ]
+      },
+      {
+        "source": "edu",
+        "attribution": "OpenCSG / Fineweb-Edu-Chinese contributors",
+        "revision": "a5b574efa48beb3a8f6887ef0b093becf004328b",
+        "data_card": "https://huggingface.co/datasets/opencsg/Fineweb-Edu-Chinese-V2.1/blob/a5b574efa48beb3a8f6887ef0b093becf004328b/README.md",
+        "declared_license": "Card metadata: apache-2.0. Body additionally requires OpenCSG Community License and permission for commercial use; both retained.",
+        "files": [
+          {
+            "url": "https://huggingface.co/datasets/opencsg/Fineweb-Edu-Chinese-V2.1/resolve/a5b574efa48beb3a8f6887ef0b093becf004328b/4_5/000000.parquet",
+            "bytes": 8743753,
+            "sha256": "c6662fb9188c96b2a1430e187ff446e933b15129e631932a6f8b04c06737169e"
+          },
+          {
+            "url": "https://huggingface.co/datasets/opencsg/Fineweb-Edu-Chinese-V2.1/resolve/a5b574efa48beb3a8f6887ef0b093becf004328b/4_5/000001.parquet",
+            "bytes": 9236198,
+            "sha256": "81289f52fe1572f03e60a725e70c4837c4812c691b91ab9d363a9e082159ef87"
+          },
+          {
+            "url": "https://huggingface.co/datasets/opencsg/Fineweb-Edu-Chinese-V2.1/resolve/a5b574efa48beb3a8f6887ef0b093becf004328b/4_5/000002.parquet",
+            "bytes": 8777512,
+            "sha256": "5880753a8d3f40cd79a5763c40f8a81b4dcd0a0ca20ae03a5215192f797c86a3"
+          },
+          {
+            "url": "https://huggingface.co/datasets/opencsg/Fineweb-Edu-Chinese-V2.1/resolve/a5b574efa48beb3a8f6887ef0b093becf004328b/4_5/000003.parquet",
+            "bytes": 9415296,
+            "sha256": "41c75dd2b6f5fbb0e94569a6434d8af770d7a547b82c6e4360f1f32786fde8c8"
+          },
+          {
+            "url": "https://huggingface.co/datasets/opencsg/Fineweb-Edu-Chinese-V2.1/resolve/a5b574efa48beb3a8f6887ef0b093becf004328b/4_5/000004.parquet",
+            "bytes": 9509326,
+            "sha256": "afebd126518aaf942aa32f8ea57af264fce63381c25e3ed5e0166540ca4667f0"
+          },
+          {
+            "url": "https://huggingface.co/datasets/opencsg/Fineweb-Edu-Chinese-V2.1/resolve/a5b574efa48beb3a8f6887ef0b093becf004328b/4_5/000005.parquet",
+            "bytes": 8950747,
+            "sha256": "31ca0a838c17771b7185b91635396d57fe80ab3c3c6c41515e1859082f4cc6b0"
+          },
+          {
+            "url": "https://huggingface.co/datasets/opencsg/Fineweb-Edu-Chinese-V2.1/resolve/a5b574efa48beb3a8f6887ef0b093becf004328b/4_5/000006.parquet",
+            "bytes": 9448321,
+            "sha256": "9a1c17bd0f88ef19a50872068c532266c4bf5b4ebbba3f35488232b30cc282dc"
+          },
+          {
+            "url": "https://huggingface.co/datasets/opencsg/Fineweb-Edu-Chinese-V2.1/resolve/a5b574efa48beb3a8f6887ef0b093becf004328b/4_5/000007.parquet",
+            "bytes": 9098517,
+            "sha256": "0f549d19c17eff698a74c36db0792d92ea17c76cad9e8f261608392b3831237f"
+          },
+          {
+            "url": "https://huggingface.co/datasets/opencsg/Fineweb-Edu-Chinese-V2.1/resolve/a5b574efa48beb3a8f6887ef0b093becf004328b/4_5/000008.parquet",
+            "bytes": 9033068,
+            "sha256": "888825e9e9519b207ac9b2d248fd74256be260dc6a6e13fcca959d1f4615217a"
+          },
+          {
+            "url": "https://huggingface.co/datasets/opencsg/Fineweb-Edu-Chinese-V2.1/resolve/a5b574efa48beb3a8f6887ef0b093becf004328b/4_5/000009.parquet",
+            "bytes": 9417505,
+            "sha256": "4c639bec07bc3fc477be87756aa4ce8ed1b99feb1638bed177262770c3b8c903"
+          },
+          {
+            "url": "https://huggingface.co/datasets/opencsg/Fineweb-Edu-Chinese-V2.1/resolve/a5b574efa48beb3a8f6887ef0b093becf004328b/4_5/000010.parquet",
+            "bytes": 9077860,
+            "sha256": "340c2aea131d3bd0d32f7909a4f7bc545aae29542096fb199a533fabe5008044"
+          },
+          {
+            "url": "https://huggingface.co/datasets/opencsg/Fineweb-Edu-Chinese-V2.1/resolve/a5b574efa48beb3a8f6887ef0b093becf004328b/4_5/000011.parquet",
+            "bytes": 9083001,
+            "sha256": "827f14d33463e2b0400245536b91076f6f5ec047da1c9007b6535d48e049783a"
+          }
+        ]
+      }
+    ],
+    "assistant_source_policy": "User authorized public selected weights on 2026-11-07; raw assistant transcripts, training text, private row records and original manifests remain excluded. No anonymization or non-memorization guarantee.",
+    "synthetic_source": "Public llmux/deepseek-flash synthetic and curated cases; service output conditions and original source attribution retained.",
+    "synthetic_generation_source_sha256": {
+      "scripts/prepare_small_corpus.py": "7d5b00f5ce214efd4bb00ee0d901338f270cd9c8d0c61bd4336012a1848bfa75",
+      "scripts/prepare_general_corpus.py": "b833f62ad3954df0bf2253032e9742f806f788c86c86d6d76f38f4d252bad0f3",
+      "scripts/build_ranking_corpus.py": "e9a91b56df5d6d1de3d27607321d8678f36cec781f42d19d934ad11c8be17045",
+      "scripts/pinyin_phrases.py": "d7a7956d2ae52cd82cc6cefd4425b0134fb6d7de5646a6a4d774466f5bca1dca",
+      "scripts/ime_lab.py": "5575d95d908619e0225966fb3132fc530ab3480f5ef81820ce2b19b38c93c6c6",
+      "scripts/prepare_agent_corpus.py": "40ec9fc3eeebe41e0bc0343f46eb3ebab6e752969a90cf7bd3282d20d8b8aae5"
+    }
+  },
+  "evaluation": {
+    "path": "Real offline CLI / Session; learning disabled",
+    "counts": [
+      {
+        "panel": "development1609",
+        "n": 1609,
+        "old_parent_int8": {
+          "top1": 1365,
+          "top5": 1519,
+          "recall": 1564
+        },
+        "v4_int8": {
+          "top1": 1405,
+          "top5": 1535,
+          "recall": 1565
+        }
+      },
+      {
+        "panel": "observed_sentences2000",
+        "n": 2000,
+        "old_parent_int8": {
+          "top1": 1431,
+          "top5": 1761,
+          "recall": 1847
+        },
+        "v4_int8": {
+          "top1": 1418,
+          "top5": 1767,
+          "recall": 1848
+        }
+      },
+      {
+        "panel": "current_continuation_holdout583",
+        "n": 583,
+        "old_parent_int8": {
+          "top1": 433,
+          "top5": 520,
+          "recall": 546
+        },
+        "v4_int8": {
+          "top1": 437,
+          "top5": 527,
+          "recall": 548
+        }
+      }
+    ],
+    "definitions": "top1/top5/recall are counts over all rows, including recall misses.",
+    "limits": [
+      "3609 development cases used for selection; 2000 sentences already observed and used for regression protection.",
+      "583 protected only from current continuation; historical parent training membership cannot be proved.",
+      "Automatic readings/source labels can err. Overlapping panels are not independent generalization or daily input accuracy."
+    ],
+    "cpu": {
+      "models": "Selected v4 4M and 7M only",
+      "cpu": "Intel Core Ultra X9 388H",
+      "pinned_cpu": 4,
+      "warmup_replays": 1,
+      "order": [
+        "4m",
+        "7m",
+        "7m",
+        "4m",
+        "4m",
+        "7m"
+      ],
+      "runs_per_model": 3,
+      "frames_per_run": 354,
+      "frames_per_model": 1062,
+      "scope": "Per-frame wall time action+refine+apply, process-local Session including bounded neural recall.",
+      "wall_ms": {
+        "p50": 2.522683,
+        "p95": 17.259961,
+        "p99": 45.115509
+      },
+      "total_cpu_time_7m_over_4m": 1.52699,
+      "limits": "No IBus, GNOME, keyboard or key-to-screen measurement; OS file cache not controlled."
+    }
+  },
+  "evidence_sha256": {
+    "inputs.json": "1f7d76a09eca3845227accf069f8e9fe3e119dc3cea043ee0bd3ea3f364b4763",
+    "corpus/recipe.json": "491a2ee531279c2ce4b945e0e3bc8c5e6a37cbc12a76128a8f8a90e0db4eb3ce",
+    "4m-pretrain/recipe.json": "ab81848930023f7c7e34b0d8de2da47cbe22b6c6761ce3a873eb38c9f6b57191",
+    "4m-pretrain/selection.json": "6ad63ae413ecc9c0cdf446d388ffe0d0bd1109ef1ce0fcb51876498aa29a26d6",
+    "4m-ranker/recipe.json": "b065a68c89cfac9969e5ba9a6f3cc47af4790e3eb29cfd39927db1fdfae90dc6",
+    "4m-ranker/selection.json": "f356fcf2d3065d5c04ce7372a18a978944ce380a5ed4c8eafaeaa7ee7cfe2fbc",
+    "measurement/provenance.json": "819e95331c051cbfe496904eeef4e1bf725fa4698135e269fc9157450b795adc",
+    "measurement/summary.json": "2bfa8d0058ffeab6a27f6564d59e0d69d62556fb22c8c23fe0e46d9646acaf00"
+  },
+  "documentation_sha256": {
+    "README.md": "56017f1351657029b61307fb3b478fe17b27520d3d51b2fa40a38d9b35925a07",
+    "LICENSE": "3449a189943b11700bb2bf451e92f30b96ab8c56b4e245365aaf5cdeacc8dc2a",
+    "NOTICE": "773e3843c1f577565a4b0ed09d01153d12537ce21d710dcd8fdb45dcff5fcd55"
+  }
+}

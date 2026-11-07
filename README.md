@@ -94,28 +94,28 @@ target/release/yanliu --model data/models/sentence-model.safetensors \
 
 ## 模型
 
-默认下载仍是 `models-v2` 发布的 4M 权重，实际 448 万参数，INT8 文件约 4.73 MB。日常运行只用本机 CPU，不调用远端大模型。
+默认下载仍是 `models-v2` 的 4M 权重，实际 448 万参数，INT8 文件约 4.73 MB。日常运行只用本机 CPU，不调用远端大模型；已有 CPU 安装升级保留已安装模型。
 
-新发布的 `models-v3` 提供本机选定的 4M 修复版 `ca1f0279…`。它在常用词、语境和已知修复集上有所改善，但当前同一 CLI 的已观测 2,000 条句子回归首选由旧默认的 1,431 降为 1,419，因此作为可选版本提供，公共默认不自动更换。这些材料存在训练与历史观测关系，不代表独立泛化成绩。
+`models-v4` 提供新一批可选 4M / 7M 权重。两者从各自真实 FP32 父模型继续预训练 1 亿个有效目标；随后三轮排序训练没有提高 INT8 选模指标，均保留排序 epoch 0。后续小模型工作以 4M / 7M 为主，25M 保留为历史版本。
 
-2026-10-25 的两轮低学习率续训中，分组首选先持平后退步，已保留原权重并停止续训，没有扩大模型。完整停止依据与取舍见[模型来源复核](data/model-cards/SOURCE-REVIEW.md)。
+- **7M v4：优先尝试的可选版本。** 实际 719 万参数，INT8 约 7.49 MB。同路径已观测 2,000 条句子首选由历史 7M 的 1,443 升为 1,462，本轮 583 条留出由 434 升为 453；24 条语境首选则由 22 降为 21。详见 [7M v4 模型卡](data/model-cards/yanliu-7m-v4/README.md)。
+- **4M v4：较低 CPU 代价的可选版本。** 同路径开发部分首选由历史 4M 的 1,365/1,609 升为 1,405/1,609，本轮留出由 433/583 升为 437/583；已观测句子首选由 1,431/2,000 降为 1,418/2,000。详见 [4M v4 模型卡](data/model-cards/yanliu-4m-v4/README.md)。
+- **历史版本。** 默认 [4M v2](data/model-cards/yanliu-4m-v2/README.md)、可选修复版 [4M v3](data/model-cards/yanliu-4m-v3/README.md)及 [25M v2](data/model-cards/yanliu-25m-v2/README.md)保留各自来源与历史结果；[最初的 25M](data/model-cards/yanliu-25m-v1/README.md)也可查阅。
 
-- **4M：默认。** `models-v2` 版本，历史指标见 [4M v2 模型卡](data/model-cards/yanliu-4m-v2/README.md)。
-- **4M v3：可选修复版。** 权重、来源声明与续训停止记录见 [4M v3 模型卡](data/model-cards/yanliu-4m-v3/README.md)。显式指定 `YANLIU_MODEL_DIR` 可更换；已有 CPU 安装升级默认保留已安装模型。
-- **25M：可选。** 实际 2,354 万参数，INT8 文件约 24.03 MB，models-v2 发布时的留出集首选命中更高，计算量也更高，见 [25M 模型卡](data/model-cards/yanliu-25m-v2/README.md)。
+本轮 3,609 条开发数据参与选模，2,000 条句子早已观测并纳入回归保护；583 条只与本轮训练隔离，无法证明未进入历史父模型预训练。所有分母包含未召回目标；自动注音与标签可能有误，这些结果不代表独立泛化或日常输入准确率。
 
-历史 models-v2 的两个模型从随机权重训练，使用约 5,227 万字符的公共中文文本，再以实际 CLI 候选微调。models-v2 发布时，在权重和默认选择冻结后的 1,750 条留出样本上，首选命中率为 4M **73.49%**、25M **75.77%**，原本机 7M 为 **71.54%**。所有样本均计入分母，包括未召回的目标；自动注音和来源文本仍可能有误，这些数字不等同于日常输入准确率。
+本批 4M / 7M 的三轮串行交错 CPU 回放各含 1,062 帧，进程内 Session 的 action + refine + apply 墙钟 p50 为 **2.523 / 4.147 ms**，p95 为 **17.260 / 26.275 ms**，p99 为 **45.116 / 69.803 ms**；7M 总 CPU 时间为 4M 的 **1.527 倍**。含有界模型召回，不含 IBus、GNOME 绘制或键到屏幕延迟；这组口径不能与旧版历史基准直接比较。
 
-models-v2 发布时的三轮 CPU 回放中，发生模型评分的帧，输入处理与候选提升合计 p95 为 4M **4.15 ms**、25M **35.70 ms**。这组历史基准使用相同的 Session 和静态候选池，只测进程内处理，不含 IBus 通信与 GNOME 绘制。当前代码已加入拼音约束的模型召回；当前两版 4M 的同路径对照见[模型来源复核](data/model-cards/SOURCE-REVIEW.md)，与这组历史基准口径不同。
+v4 训练正文含获用户明确授权的本地 Claude / Codex / Grok 助手中文。用户授权公开发布选定权重，原始对话与训练正文仍不公开；private-derived 来源分类及权重原始元数据保留，没有匿名化或不会记忆训练内容的保证。混合来源没有统一模型开源许可，NaturalConv、COIG-CQIA、TNEWS 和 Fineweb-Edu 等来源条件见新模型卡的 LICENSE、NOTICE 与 provenance.json。
 
-默认资产由 `fetch_assets.py` 下载并校验 SHA-256；`python3 scripts/fetch_assets.py --verify-only` 可检查本地文件。[4M v3 发布页](https://github.com/NEX-S/yanliu/releases/tag/models-v3)提供可选修复版；[历史 v2 发布页](https://github.com/NEX-S/yanliu/releases/tag/models-v2)保留 4M / 25M 压缩包。包中包含权重、来源和评测说明。解包后可在首次安装时指定：
+[models-v4 预发布页](https://github.com/NEX-S/yanliu/releases/tag/models-v4)提供可选 4M / 7M 压缩包和 SHA256SUMS；[v3 发布页](https://github.com/NEX-S/yanliu/releases/tag/models-v3)与[历史 v2 发布页](https://github.com/NEX-S/yanliu/releases/tag/models-v2)保留旧包。解包后显式指定：
 
 ```sh
-YANLIU_MODEL_DIR=/absolute/path/to/yanliu-4m-v3 \
+YANLIU_MODEL_DIR=/absolute/path/to/yanliu-7m-v4 \
   ./packaging/install-local.sh
 ```
 
-数据来源、训练方法与复现范围见[训练记录](data/training/retrain-v2/README.md)。[v0.1.0 的 25M](data/model-cards/yanliu-25m-v1/README.md)保留为历史版本。
+默认资产仍由 `fetch_assets.py` 下载并校验 SHA-256；`python3 scripts/fetch_assets.py --verify-only` 检查的是默认清单资产。历史公开语料训练与复现范围见[训练记录](data/training/retrain-v2/README.md)，旧版来源复核见[模型来源复核](data/model-cards/SOURCE-REVIEW.md)。
 
 ## 原理
 

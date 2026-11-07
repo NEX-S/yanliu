@@ -42,6 +42,18 @@ integration fixtures are omitted. Local changes to `src/lib.rs` are kept in
 `yanliu.patch`. The GPL-3.0 license of the main upstream repository is distinct
 from the Apache-2.0 license granted to `reference/`.
 
+## v4 continued 4M / 7M models
+
+The optional `models-v4` release provides continued 4M and 7M weights. Their
+[4M model card](model-cards/yanliu-4m-v4/README.md) and
+[7M model card](model-cards/yanliu-7m-v4/README.md) retain source revisions,
+hashes, attribution and known source conditions. Training includes authorized
+local Claude, Codex and Grok assistant text; these are private-source-derived
+weights whose publication was authorized by the repository owner. Original
+conversations and training text are not included. No unified model license or
+guarantee against memorization is claimed. The historical v2 download remains
+the default in `manifest.json`.
+
 ## v2 language models
 
 The default `yanliu-4m-v2` and optional `yanliu-25m-v2` were trained from random
