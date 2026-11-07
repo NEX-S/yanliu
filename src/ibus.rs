@@ -272,10 +272,7 @@ impl RankingWorker {
                             }
                             state.pending.pop_front().expect("woken for a pending job")
                         };
-                        if !job.current() {
-                            continue;
-                        }
-                        let generation = job.generation.clone();
+                        let generation = &job.generation;
                         let serial = job.serial;
                         let promotion = match model.refine(&mut job.snapshot, &decoder, || {
                             generation.load(Ordering::Acquire) == serial

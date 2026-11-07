@@ -96,7 +96,7 @@ def installation(directory):
         raise ValueError(f'{directory}: selected model SHA-256 does not match files')
     if 'model_provenance' in record and record['model_provenance'] not in files:
         raise ValueError(f'{directory}: selected model provenance is not managed')
-    return files
+    return record
 
 
 def unmanaged(directory, files):
@@ -220,15 +220,15 @@ def main():
     previous = destination.parent / '.yanliu-previous'
     extra = []
     if args.upgrade or args.rollback:
-        files = managed_layout(destination, launcher, component, environment, config_file, settings, device)
+        record = managed_layout(destination, launcher, component, environment, config_file, settings, device)
+        files = record['files']
         if preserve_model:
             model_dir = destination / 'models'
-            record = json.loads((destination / 'installation.json').read_text())
         extra = unmanaged(destination, files)
         if previous.exists() or previous.is_symlink():
             if previous.is_symlink() or not previous.is_dir():
                 raise ValueError(f'{previous}: expected a managed previous installation directory')
-            previous_files = installation(previous)
+            previous_files = installation(previous)['files']
             if args.rollback and device != 'cpu':
                 required = {f'models/sentence-model.{suffix}' for suffix in ('xml', 'bin', 'openvino.json')}
                 required |= {'runtime/runtime-source.json', f'runtime/libopenvino_intel_{device}_plugin.so'}

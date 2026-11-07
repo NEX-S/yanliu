@@ -233,21 +233,24 @@ impl Decoder {
                     continue;
                 }
                 let mut seen = HashSet::new();
-                for entry in self
+                for (entry, character) in self
                     .dictionary
                     .exact(&input.key[start..end])
-                    .filter(|entry| {
-                        entry.ends.len() == 1
-                            && allowed(entry, start, end, &input.boundaries)
-                            && entry.text.chars().count() == 1
-                            && model.contains_character(entry.text.chars().next().unwrap())
+                    .filter_map(|entry| {
+                        let mut characters = entry.text.chars();
+                        let character = characters.next()?;
+                        (entry.ends.len() == 1
+                            && allowed(&entry, start, end, &input.boundaries)
+                            && characters.next().is_none()
+                            && model.contains_character(character))
+                        .then_some((entry, character))
                     })
-                    .filter(|entry| seen.insert(entry.text))
+                    .filter(|(entry, _)| seen.insert(entry.text))
                     .take(SPAN_ENTRIES)
                 {
                     arcs[start].push(Edge {
                         end,
-                        character: entry.text.chars().next().unwrap(),
+                        character,
                         weight: entry.weight,
                     });
                     longest[start] = longest[start].max(longest[end] + 1);

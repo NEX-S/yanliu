@@ -289,11 +289,7 @@ impl Session {
             let has_correction = self.candidates.iter().any(|candidate| {
                 candidate.consumed == self.input.len() && candidate.source.is_correction()
             });
-            let mut positions = vec![0; source_order.len()];
-            for (position, &original) in source_order.iter().enumerate() {
-                positions[original] = position;
-            }
-            let mut eligible = vec![false; source_order.len()];
+            let mut positions = vec![None; source_order.len()];
             let slots: Vec<_> = self
                 .candidates
                 .iter()
@@ -308,23 +304,24 @@ impl Session {
                             || !has_correction
                             || candidate.source != CandidateSource::User)
                     {
-                        eligible[source_order[position]] = true;
+                        positions[source_order[position]] = Some(position);
                         Some(position)
                     } else {
                         None
                     }
                 })
                 .collect();
-            for (target, &original) in slots
-                .into_iter()
-                .zip(order.iter().filter(|&&original| eligible[original]))
-            {
-                let current = positions[original];
+            let mut slots = slots.into_iter();
+            for &original in order {
+                let Some(current) = positions[original] else {
+                    continue;
+                };
+                let target = slots.next().expect("each ranked candidate has a slot");
                 let displaced = source_order[target];
                 self.candidates.swap(target, current);
                 source_order.swap(target, current);
-                positions[original] = target;
-                positions[displaced] = current;
+                positions[original] = Some(target);
+                positions[displaced] = Some(current);
             }
         }
         self.feedback = (promotion.feedback
@@ -406,38 +403,7 @@ fn rank_candidates(
             .then(bc.cmp(ac))
             .then(b.score.total_cmp(&a.score))
     });
-    let mut candidates: Vec<_> = ranked.into_iter().map(|(candidate, _)| candidate).collect();
-    if !candidates
-        .iter()
-        .any(|c| c.consumed == input.len() && c.source.is_correction())
-    {
-        return candidates;
-    }
-    // Corrections share only full-conversion slots; learned, partial and
-    // Completion candidates keep the positions established above.
-    let slots: Vec<_> = candidates
-        .iter()
-        .enumerate()
-        .filter_map(|(index, c)| {
-            (c.consumed == input.len()
-                && !matches!(
-                    c.source,
-                    CandidateSource::User | CandidateSource::Completion
-                ))
-            .then_some(index)
-        })
-        .collect();
-    for next in 1..slots.len() {
-        let mut position = next;
-        while position > 0
-            && candidates[slots[position - 1]].source.is_correction()
-            && !candidates[slots[position]].source.is_correction()
-        {
-            candidates.swap(slots[position - 1], slots[position]);
-            position -= 1;
-        }
-    }
-    candidates
+    ranked.into_iter().map(|(candidate, _)| candidate).collect()
 }
 
 #[cfg(test)]

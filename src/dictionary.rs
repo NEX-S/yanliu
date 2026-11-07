@@ -145,11 +145,8 @@ impl Dictionary {
             syllables: Vec::new(),
         }
     }
-    pub fn load_dir(path: impl AsRef<Path>) -> Result<Self, DictionaryError> {
-        Self::load_dir_with_user_dictionary(path, None)
-    }
     /// Merge an explicitly selected user table before building the shared indexes.
-    pub fn load_dir_with_user_dictionary(
+    pub fn load_dir(
         path: impl AsRef<Path>,
         user_dictionary: Option<&Path>,
     ) -> Result<Self, DictionaryError> {
@@ -667,8 +664,7 @@ mod tests {
         }
         let user = directory.join("user.dict.yaml");
         std::fs::write(&user, "...\n砚流\tyan liu\t10\n砚流\tyan liu\t20\n").unwrap();
-        let dictionary =
-            Dictionary::load_dir_with_user_dictionary(&directory, Some(&user)).unwrap();
+        let dictionary = Dictionary::load_dir(&directory, Some(&user)).unwrap();
         assert_eq!(dictionary.len(), 2);
         assert_eq!(dictionary.exact("yanliu").next().unwrap().weight, 20.0);
         let decoder = Arc::new(Decoder::new(dictionary));
@@ -699,7 +695,7 @@ mod tests {
         // Public tables name the failing file too.
         let base = directory.join("base.dict.yaml");
         std::fs::write(&base, "...\n你\tNI\n").unwrap();
-        let error = Dictionary::load_dir_with_user_dictionary(&directory, None)
+        let error = Dictionary::load_dir(&directory, None)
             .unwrap_err()
             .to_string();
         assert!(

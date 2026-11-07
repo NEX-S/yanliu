@@ -119,16 +119,14 @@ pub fn run(
                 .map_err(|error| at(&error))?;
         }
         let static_rank = rank(&session, &case.golds);
-        let mut scoring = None;
+        let mut scoring = Value::Null;
         if let Some(model) = &mut model {
             let mut snapshot = session.snapshot();
             let promotion = model
                 .refine(&mut snapshot, decoder, || true)?
                 .expect("synchronous CLI inference cannot be cancelled");
-            scoring = Some(json!({
-                "candidates": candidate_values(&snapshot.candidates),
-                "promotion": promotion,
-            }));
+            scoring = json!({"promotion": promotion});
+            scoring["candidates"] = Value::Array(candidate_values(&snapshot.candidates));
             let _ = session.apply_candidates(snapshot.revision, snapshot.candidates, &promotion);
         }
         let rank = rank(&session, &case.golds);
@@ -142,14 +140,15 @@ pub fn run(
                 .or_default()
                 .add(static_rank, rank);
         }
-        let candidates = candidate_values(session.candidates());
         let id = if case.id.is_empty() {
             (line + 1).to_string()
         } else {
             case.id
         };
-        rows.push(json!({"id": id, "rank": rank, "static_rank": static_rank,
-                   "candidates": candidates, "scoring": scoring}));
+        let mut row = json!({"id": id, "rank": rank, "static_rank": static_rank});
+        row["candidates"] = Value::Array(candidate_values(session.candidates()));
+        row["scoring"] = scoring;
+        rows.push(row);
     }
     if rows.is_empty() {
         return Err(format!("{}: no cases", data.display()).into());

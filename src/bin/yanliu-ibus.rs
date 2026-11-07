@@ -30,7 +30,7 @@ async fn service() -> Result<()> {
         settings.learning_enabled,
         settings.contextual_learning
     );
-    let decoder = Arc::new(Decoder::new(Dictionary::load_dir_with_user_dictionary(
+    let decoder = Arc::new(Decoder::new(Dictionary::load_dir(
         settings.data_dir.join("dictionaries"),
         settings.user_dictionary.as_deref(),
     )?));

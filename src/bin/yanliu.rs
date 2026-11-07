@@ -70,7 +70,7 @@ enum LearningCommand {
 fn main() -> Result<()> {
     let args = Args::parse();
     let assets = || -> Result<(Arc<Decoder>, Option<Model>)> {
-        let decoder = Arc::new(Decoder::new(Dictionary::load_dir_with_user_dictionary(
+        let decoder = Arc::new(Decoder::new(Dictionary::load_dir(
             &args.dictionary_dir,
             args.user_dictionary.as_deref(),
         )?));

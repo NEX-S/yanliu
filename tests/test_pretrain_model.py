@@ -1,4 +1,4 @@
-"""Spec boundaries, known-target masking and random training on a tiny CPU model."""
+"""Spec boundaries, known-target masking and initialization on a tiny CPU model."""
 import importlib.util
 from contextlib import nullcontext
 import json
@@ -20,6 +20,7 @@ SPEC.loader.exec_module(TRAIN)
 try:
     import torch
     from safetensors import safe_open
+    from safetensors.torch import save_file
 except ImportError:
     torch = None
 
@@ -215,6 +216,54 @@ class TextTrainingTests(unittest.TestCase):
             c = TRAIN.initialize_random(config, torch, 43)
             self.assertTrue(torch.equal(a.tok.weight, b.tok.weight))
             self.assertFalse(torch.equal(a.tok.weight, c.tok.weight))
+
+    def test_parent_weights_match_initial_loss_keep_new_provenance_and_train_one_step(self):
+        with tempfile.TemporaryDirectory(prefix="parent-pretraining-", dir=CACHE) as directory:
+            directory = Path(directory)
+            source = directory / "spec.json"
+            provenance = dict(PROVENANCE, data_classification="private-local-test")
+            write_spec(source, provenance=provenance)
+            train, dev = directory / "train.txt", directory / "dev.txt"
+            train.write_text("你未好世界你好\n", encoding="utf-8")
+            dev.write_text("世未界你\n", encoding="utf-8")
+            parent = directory / "parent.safetensors"
+            model = TRAIN.initialize_random(CONFIG, torch, 97).eval()
+            TRAIN.save_best(model, {"format": "chinese-ime-lm", "version": "1", "tied_embeddings": "true",
+                "config": json.dumps(CONFIG), "vocab": json.dumps(VOCAB), "precision": "f32",
+                "data_classification": "public-parent-fixture"}, parent, torch, save_file)
+            parent_sha = TRAIN.digest(parent)
+            with torch.no_grad():
+                expected_loss = model(torch.tensor([[2, 5, 1, 6]]), torch.tensor([[5, 0, 6, 3]]))[1].item()
+            output = directory / "output"
+            command = [sys.executable, str(ROOT / "scripts/pretrain_model.py"),
+                "--model", str(parent), "--train", str(train), "--dev", str(dev), "--spec", str(source),
+                "--output-dir", str(output), "--device", "cpu", "--precision", "fp32",
+                "--epochs", "1", "--max-tokens", "5", "--batch", "2", "--threads", "1"]
+            result = subprocess.run(command, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            training = json.loads((output / "training.json").read_text())
+            self.assertAlmostEqual(training[0]["cross_entropy"], expected_loss, places=6)
+            selection = json.loads((output / "selection.json").read_text())
+            self.assertEqual(selection["optimizer_steps"], 1)
+            self.assertEqual(selection["training_effective_targets"], 5)
+            recipe = json.loads((output / "recipe.json").read_text())
+            self.assertEqual(recipe["initialization"], "parent weights")
+            self.assertEqual(recipe["parent_model"], {"path": str(parent), "sha256": parent_sha})
+            self.assertEqual(recipe["provenance"], provenance)
+            with safe_open(str(output / "best-f32.safetensors"), framework="pt") as artifact:
+                metadata = artifact.metadata()
+                self.assertEqual(metadata["initialization"], "parent weights")
+                self.assertEqual(metadata["parent_model_path"], str(parent))
+                self.assertEqual(metadata["parent_model_sha256"], parent_sha)
+                self.assertEqual(json.loads(metadata["provenance"]), provenance)
+                self.assertEqual(metadata["data_classification"], "private-local-test")
+            self.assertEqual(TRAIN.digest(parent), parent_sha)
+            for config, vocab in [(dict(CONFIG, dropout=0.1), VOCAB),
+                                  (CONFIG, VOCAB[:3] + VOCAB[3:][::-1])]:
+                write_spec(source, config=config, vocab=vocab, provenance=provenance)
+                result = subprocess.run(command, capture_output=True, text=True)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("parent model config and vocabulary must match --spec", result.stderr)
 
     def test_requested_device_precision_does_not_silently_fallback(self):
         with self.assertRaisesRegex(ValueError, "CPU training requires"):

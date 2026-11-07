@@ -8,6 +8,7 @@ does not install a model or access system learning.
 """
 import argparse
 from collections import Counter, defaultdict
+from concurrent.futures import ThreadPoolExecutor
 import copy
 from fractions import Fraction
 import hashlib
@@ -340,6 +341,34 @@ def cli_evaluate(binary, data, output, model=None):
         "path": str(output), "sha256": digest(output)}
 
 
+def capture_training_groups(binary, cases, model, vocab, window, output_dir):
+    groups, statuses, commands = [], Counter(), []
+    batch_size = 1024
+
+    def capture(start):
+        batch = cases[start:start + batch_size]
+        stem = f"train-source-{start // batch_size + 1:04d}"
+        data = output_dir / f"{stem}.jsonl"
+        with data.open("x", encoding="utf-8") as stream:
+            for case in batch:
+                json.dump({key: value for key, value in case.items() if key != "gold"},
+                          stream, ensure_ascii=False, allow_nan=False)
+                stream.write("\n")
+        report, command = cli_evaluate(binary, data, output_dir / f"{stem}.json", model)
+        batch_groups, batch_statuses = training_groups(batch, report, vocab, window)
+        command = dict(command, input_sha256=digest(data),
+                       command_sha256=hashlib.sha256(json.dumps(command["command"]).encode()).hexdigest())
+        del report
+        return batch_groups, batch_statuses, command
+
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        for batch_groups, batch_statuses, command in executor.map(capture, range(0, len(cases), batch_size)):
+            groups.extend(batch_groups)
+            statuses.update(batch_statuses)
+            commands.append(command)
+    return groups, dict(statuses), commands
+
+
 def parser():
     result = argparse.ArgumentParser(description=__doc__)
     for name in ["model", "binary", "train", "dev", "output-dir"]:
@@ -433,9 +462,8 @@ def main():
         recipe["data"]["text_train"] = digest(args.text_train)
     write_json(args.output_dir / "recipe.json", recipe)
     recipe_sha = digest(args.output_dir / "recipe.json")
-    train_report, train_command = cli_evaluate(
-        args.binary, args.train, args.output_dir / "train-source.json", args.model)
-    groups, statuses = training_groups(train, train_report, vocab, cfg.context)
+    groups, statuses, train_commands = capture_training_groups(
+        args.binary, train, args.model, vocab, cfg.context, args.output_dir)
     target_groups = sum(group.get("target_only", False) for group in groups)
     retention_groups = sum(group.get("retain_top1", False) for group in groups)
     write_json(args.output_dir / "training-data.json", {
@@ -445,8 +473,8 @@ def main():
         "target_only_groups": target_groups,
         "target_only_unrepresented": statuses.get("gold_outside_scoring", 0) - target_groups,
         "statuses": statuses,
-        "source_model_cli": train_command, "groups": groups})
-    del train_report, train
+        "source_model_cli": train_commands, "groups": groups})
+    del train
     if not groups and args.epochs:
         raise ValueError("no trainable candidate groups; see training-data.json")
     initial_artifacts = export_model(model, metadata, recipe["runtime"], recipe["initial_model_sha256"],

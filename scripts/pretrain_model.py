@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Train random character-model weights on explicitly supplied paragraph text.
+"""Train character-model weights on explicitly supplied paragraph text.
 
 Each UTF-8 line is an independent paragraph. --spec supplies the model shape,
-character vocabulary and provenance; no pretrained weights are loaded.
+character vocabulary and provenance. --model supplies optional parent weights;
+otherwise weights are initialized randomly.
 """
 import argparse
 from contextlib import contextmanager
@@ -195,6 +196,7 @@ def parser():
     result = argparse.ArgumentParser(description=__doc__)
     for name in ("train", "dev", "spec", "output-dir"):
         result.add_argument("--" + name, type=Path, required=True)
+    result.add_argument("--model", type=Path, help="initialize from parent weights matching --spec")
     result.add_argument("--device", choices=("cpu", "xpu"), default="xpu")
     result.add_argument("--precision", choices=("fp32", "bf16"), default="bf16")
     result.add_argument("--epochs", type=int, default=12)
@@ -216,6 +218,8 @@ def main():
         raise ValueError("epochs, token/time budgets, batch, threads and lr must be positive and finite")
     for key in ("train", "dev", "spec", "output_dir"):
         setattr(args, key, getattr(args, key).resolve())
+    if args.model is not None:
+        args.model = args.model.resolve()
     data_hashes = {"train": digest(args.train), "dev": digest(args.dev)}
     if args.train == args.dev or data_hashes["train"] == data_hashes["dev"]:
         raise ValueError("train/dev text must be different files with different contents")
@@ -228,6 +232,18 @@ def main():
     torch.set_num_threads(args.threads)
     torch.set_num_interop_threads(1)
     torch.use_deterministic_algorithms(args.device == "cpu")
+    parent = None
+    if args.model is not None:
+        parent = {"path": str(args.model), "sha256": digest(args.model)}
+        sys.path.insert(0, str(ROOT / "vendor/chinese-ime-training/neural"))
+        from initialize import load_initial_model
+        torch.manual_seed(args.seed)
+        model, parent_config, parent_vocab, _ = load_initial_model(args.model)
+        if vars(parent_config) != config or parent_vocab != vocab:
+            raise ValueError("parent model config and vocabulary must match --spec")
+    else:
+        model = initialize_random(config, torch, args.seed)
+    model.to(args.device)
     args.output_dir.mkdir(parents=True, exist_ok=False)
     train, train_counts = encode_text(args.train, vocab, config["context"], args.output_dir / "train.tokens.u16")
     dev, dev_counts = encode_text(args.dev, vocab, config["context"], args.output_dir / "dev.tokens.u16")
@@ -236,9 +252,13 @@ def main():
     train_groups = length_groups(train)
     dev_batches = text_batches(length_groups(dev), position_budget)
     sources = [Path(__file__).resolve(), ROOT / "vendor/chinese-ime-training/neural/model.py"]
-    recipe = {"format": "yanliu-random-pretraining-v3", "arguments": {
+    if parent is not None:
+        sources.append(ROOT / "vendor/chinese-ime-training/neural/initialize.py")
+    recipe = {"format": "yanliu-continued-pretraining-v1" if parent else "yanliu-random-pretraining-v3", "arguments": {
         key: str(value) if isinstance(value, Path) else value for key, value in vars(args).items()},
-        "torch": torch.__version__, "config": config, "initialization": "random; no parent weights loaded",
+        "torch": torch.__version__, "config": config,
+        "initialization": "parent weights" if parent else "random; no parent weights loaded",
+        "parent_model": parent,
         "runtime": {"device": args.device, "precision": args.precision,
                     "attention_backend": "math" if args.precision == "bf16" else "framework_default",
                     "name": torch.xpu.get_device_name(0) if args.device == "xpu" else "CPU",
@@ -260,18 +280,19 @@ def main():
         "selection": "lowest complete text dev next-character CE; ties keep earlier checkpoint"}
     write_json(args.output_dir / "recipe.json", recipe)
     recipe_sha = digest(args.output_dir / "recipe.json")
-    model = initialize_random(config, torch, args.seed).to(args.device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, betas=(0.9, 0.95),
                                  weight_decay=0.01, foreach=False)
     metadata = {"format": "chinese-ime-lm", "version": "1", "tied_embeddings": "true",
                 "config": json.dumps(config), "vocab": json.dumps(vocab, ensure_ascii=False),
-                "precision": "f32", "initialization": "random", "seed": str(args.seed),
+                "precision": "f32", "initialization": "parent weights" if parent else "random", "seed": str(args.seed),
                 "training_device": args.device, "training_precision": args.precision,
                 "license": provenance["license"], "data_classification": provenance["data_classification"],
                 "attribution": provenance["attribution"],
                 "provenance": json.dumps(provenance, ensure_ascii=False, allow_nan=False),
                 "training_spec_sha256": spec_sha, "training_recipe_sha256": recipe_sha,
                 "train_sha256": recipe["data"]["train"], "dev_sha256": recipe["data"]["dev"]}
+    if parent is not None:
+        metadata.update(parent_model_path=parent["path"], parent_model_sha256=parent["sha256"])
     started = time.monotonic()
     best = evaluate_text(model, dev, dev_batches, args.device, args.precision, torch)
     best.update(epoch=0, optimizer_steps=0, training_effective_targets=0)
@@ -346,6 +367,8 @@ def main():
             raise ValueError(f"{key} changed during pretraining")
     if digest(args.spec) != spec_sha:
         raise ValueError("training spec changed during pretraining")
+    if parent is not None and digest(args.model) != parent["sha256"]:
+        raise ValueError("parent model changed during pretraining")
     for relative, expected in recipe["source"].items():
         if digest(ROOT / relative) != expected:
             raise ValueError(f"source changed during pretraining: {relative}")

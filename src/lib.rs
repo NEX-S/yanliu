@@ -384,8 +384,10 @@ mod tests {
     #[test]
     #[ignore = "requires downloaded full dictionary assets"]
     fn real_dictionary_loads_and_decodes() {
-        let d = Decoder::new(Dictionary::load_dir("data/dictionaries").unwrap());
-        assert!(d.dictionary().len() > 500_000);
+        let dictionary = Dictionary::load_dir("data/dictionaries", None).unwrap();
+        let entries = dictionary.len();
+        assert!(entries > 500_000);
+        let d = Decoder::new(dictionary);
         for input in [
             "nihao",
             "woaini",
@@ -496,14 +498,14 @@ mod tests {
                 CandidateSource::ExactDictionary
             );
         }
-        println!("entries={}", d.dictionary().len());
+        println!("entries={entries}");
     }
 
     #[test]
     fn incremental_and_whole_input_sessions_produce_identical_refined_menus() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
         let decoder = Arc::new(Decoder::new(
-            Dictionary::load_dir(root.join("data/dictionaries")).unwrap(),
+            Dictionary::load_dir(root.join("data/dictionaries"), None).unwrap(),
         ));
         let (mut model, mut other) = (model(), model());
         let bits = |session: &Session| {

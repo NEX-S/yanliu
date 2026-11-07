@@ -50,6 +50,47 @@ def scored_row(identity, candidates, indices=None, dictionary=None, language=Non
 
 
 class TrainingDataTests(unittest.TestCase):
+    def test_training_capture_batches_keep_all_cases_groups_and_reports(self):
+        with tempfile.TemporaryDirectory(prefix="train-ranker-capture-", dir=TEST_CACHE) as directory:
+            directory = Path(directory)
+            data = directory / "cases.jsonl"
+            data.write_text("".join(json.dumps({"input": "xian", "gold": "西安", "context": "前文"}) + "\n"
+                                    for _ in range(2051)))
+            cases = TRAIN.read_cases(data)
+            rows = [scored_row(case["id"], [candidate("现"), candidate("西安")], rank=1)
+                    if i % 3 == 0 else scored_row(case["id"], [candidate("现"), candidate("先")])
+                    if i % 3 == 1 else scored_row(case["id"], [candidate("现")])
+                    for i, case in enumerate(cases)]
+            expected = TRAIN.training_groups(cases, report(rows), VOCAB, 64)
+            by_id = {row["id"]: row for row in rows}
+            captured = []
+
+            def run(command, **kwargs):
+                chunk = TRAIN.read_cases(command[command.index("--data") + 1])
+                captured.append(chunk)
+                output = Path(command[command.index("--output") + 1])
+                TRAIN.write_json(output, report([by_id[case["id"]] for case in chunk]))
+
+            with mock.patch.object(TRAIN.subprocess, "run", side_effect=run):
+                groups, statuses, commands = TRAIN.capture_training_groups(
+                    Path("yanliu"), cases, Path("parent.safetensors"), VOCAB, 64, directory)
+            captured.sort(key=lambda chunk: int(chunk[0]["id"]))
+            self.assertEqual([len(chunk) for chunk in captured], [1024, 1024, 3])
+            self.assertEqual([case for chunk in captured for case in chunk],
+                             [{key: value for key, value in case.items() if key != "gold"} for case in cases])
+            self.assertEqual((groups, statuses), expected)
+            self.assertEqual(sum(statuses.values()), len(cases))
+            self.assertEqual(len(commands), 3)
+            self.assertEqual([Path(command["path"]).name for command in commands],
+                             [f"train-source-{number:04d}.json" for number in range(1, 4)])
+            for command in commands:
+                self.assertEqual(command["sha256"], TRAIN.digest(command["path"]))
+                self.assertEqual(command["input_sha256"], TRAIN.digest(
+                    command["command"][command["command"].index("--data") + 1]))
+                self.assertEqual(command["command_sha256"], TRAIN.hashlib.sha256(
+                    json.dumps(command["command"]).encode()).hexdigest())
+                self.assertEqual(command["command"][3:5], ["--model", "parent.safetensors"])
+
     def test_only_actual_source_top1_rank_groups_use_retention(self):
         cases = [{"id": str(i), "input": "xian", "context": "前文", "golds": ["西安"]}
                  for i in range(3)]
@@ -479,7 +520,7 @@ class TrainingTensorTests(unittest.TestCase):
                                   "candidates": [candidate("入", consumed=2)]}])
 
             def evaluate(binary, cases, output, model=None):
-                return (report([source_row]) if cases == train_path else dev_report), []
+                return (report([source_row]) if cases.name.startswith("train-source-") else dev_report), {"command": []}
 
             output_dir = directory / "output"
             argv = ["train_ranker.py", "--model", str(directory / "parent.safetensors"),

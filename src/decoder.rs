@@ -70,7 +70,7 @@ pub struct Decoder {
 struct State {
     text: String,
     score: f32,
-    words: usize,
+    composed: bool,
     completion: bool,
 }
 /// Session-owned prefix beams. Completion states never become parents.
@@ -82,9 +82,6 @@ pub(crate) struct DecodeCache {
 impl Decoder {
     pub fn new(dictionary: Dictionary) -> Self {
         Self { dictionary }
-    }
-    pub fn dictionary(&self) -> &Dictionary {
-        &self.dictionary
     }
     pub fn decode(&self, input: &str) -> Vec<Candidate> {
         self.decode_cached(input, &mut DecodeCache::default())
@@ -520,10 +517,10 @@ fn assemble_picks(
             consumed: input.raw_ends[end],
             source: if state.completion {
                 CandidateSource::Completion
-            } else if state.words == 1 {
-                CandidateSource::ExactDictionary
-            } else {
+            } else if state.composed {
                 CandidateSource::Composed
+            } else {
+                CandidateSource::ExactDictionary
             },
             score: state.score,
         }));
@@ -656,7 +653,7 @@ fn offer(states: &mut Vec<State>, parent: &State, entry: &Entry<'_>, completion:
         State {
             text,
             score,
-            words: parent.words + 1,
+            composed: !parent.text.is_empty(),
             completion,
         },
     );
@@ -719,7 +716,7 @@ mod tests {
             .map(|i| State {
                 text: format!("{prefix}{i:02}"),
                 score: 100.0 - i as f32,
-                words: 1,
+                composed: false,
                 completion: i == 1,
             })
             .collect()
@@ -985,35 +982,35 @@ mod tests {
     }
     #[test]
     fn beam_replacement_and_equal_score_rules_survive_truncation() {
-        let state = |text: &str, score, words, completion| State {
+        let state = |text: &str, score, composed, completion| State {
             text: text.into(),
             score,
-            words,
+            composed,
             completion,
         };
         let mut states = Vec::new();
-        push_state(&mut states, state("same", 9.0, 1, true));
+        push_state(&mut states, state("same", 9.0, false, true));
         for i in 0..11 {
-            push_state(&mut states, state(&format!("x{i}"), 10.0, 1, false));
+            push_state(&mut states, state(&format!("x{i}"), 10.0, false, false));
         }
-        push_state(&mut states, state("same", -1.0, 2, false));
+        push_state(&mut states, state("same", -1.0, true, false));
         let same = states.iter().find(|s| s.text == "same").unwrap();
         assert_eq!(same.score.to_bits(), (-1.0f32).to_bits());
-        push_state(&mut states, state("same", -1.0, 3, false));
-        assert_eq!(states.iter().find(|s| s.text == "same").unwrap().words, 2);
-        push_state(&mut states, state("new", 11.0, 1, false));
+        push_state(&mut states, state("same", -1.0, false, false));
+        assert!(states.iter().find(|s| s.text == "same").unwrap().composed);
+        push_state(&mut states, state("new", 11.0, false, false));
         assert!(!states.iter().any(|s| s.text == "same"));
-        push_state(&mut states, state("new", 99.0, 4, true));
+        push_state(&mut states, state("new", 99.0, true, true));
         assert!(!states.iter().find(|s| s.text == "new").unwrap().completion);
 
         // A full beam skips lower extensions before building text, except one
         // replacing a completion with the same text.
         let mut beam = Vec::new();
-        push_state(&mut beam, state("ab", 9.0, 1, true));
+        push_state(&mut beam, state("ab", 9.0, false, true));
         for i in 0..11 {
-            push_state(&mut beam, state(&format!("x{i}"), 10.0, 1, false));
+            push_state(&mut beam, state(&format!("x{i}"), 10.0, false, false));
         }
-        let parent = state("a", -5.0, 1, false);
+        let parent = state("a", -5.0, false, false);
         fn entry(text: &str) -> Entry<'_> {
             Entry {
                 text,
@@ -1028,7 +1025,7 @@ mod tests {
         assert!(!beam.iter().any(|s| s.text == "ac"));
         assert!(
             beam.iter()
-                .any(|s| s.text == "ab" && !s.completion && s.words == 2)
+                .any(|s| s.text == "ab" && !s.completion && s.composed)
         );
     }
 
@@ -1327,9 +1324,7 @@ mod tests {
     #[test]
     #[ignore = "requires downloaded full dictionary assets"]
     fn real_dictionary_corrections() {
-        let d = Decoder::new(
-            Dictionary::load_dir_with_user_dictionary("data/dictionaries", None).unwrap(),
-        );
+        let d = Decoder::new(Dictionary::load_dir("data/dictionaries", None).unwrap());
         for (raw, consumed) in [("nohao", 5), ("no'haoq", 6)] {
             let hit = d
                 .decode(raw)

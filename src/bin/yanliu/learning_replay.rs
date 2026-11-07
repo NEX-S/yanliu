@@ -4,7 +4,7 @@ use serde_json::{Value, json};
 use std::{
     collections::BTreeSet,
     fs::{self, DirBuilder, File, OpenOptions},
-    io::{BufRead, BufReader, Write},
+    io::{BufRead, BufReader, BufWriter, Write},
     os::unix::fs::{DirBuilderExt, OpenOptionsExt},
     path::Path,
     sync::Arc,
@@ -44,7 +44,9 @@ fn refine(
         "source": format!("{:?}", candidate.source), "score_bits": candidate.score.to_bits(),
         "before_rank": snapshot.candidates.iter().position(|c| c == candidate).unwrap() + 1,
     })).collect();
-    Ok(json!({"candidates": candidates, "promotion": explanation}))
+    let mut result = json!({"promotion": explanation});
+    result["candidates"] = Value::Array(candidates);
+    Ok(result)
 }
 
 fn query(
@@ -95,11 +97,7 @@ pub fn run(
         if case.selects.as_ref().is_some_and(Vec::is_empty) {
             return Err(format!("{}: selects must not be empty", case.id).into());
         }
-        let choices = case
-            .selects
-            .as_deref()
-            .or_else(|| case.select.as_ref().map(std::slice::from_ref))
-            .unwrap_or_default();
+        let choices = case.selects.as_deref().unwrap_or(case.select.as_slice());
         let mut remaining = case.input.len();
         for (step, choice) in choices.iter().enumerate() {
             if choice.text.is_empty() || choice.consumed == 0 || choice.consumed > remaining {
@@ -166,21 +164,18 @@ pub fn run(
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         Err(error) => return Err(error.into()),
     }
-    let mut report_file = OpenOptions::new()
+    let report_file = OpenOptions::new()
         .write(true)
         .create_new(true)
         .mode(0o600)
         .open(&output_path)?;
+    let mut report_file = BufWriter::new(report_file);
     DirBuilder::new().mode(0o700).create(&directory)?;
     let mut writer = LearningWriter::start(&directory, true, |error| eprintln!("{error}"))?;
     let mut rows = Vec::new();
     for case in &cases {
         let (mut session, before) = query(case, decoder, &writer, &mut model)?;
-        let choices = case
-            .selects
-            .as_deref()
-            .or_else(|| case.select.as_ref().map(std::slice::from_ref))
-            .unwrap_or_default();
+        let choices = case.selects.as_deref().unwrap_or(case.select.as_slice());
         let mut selections = Vec::new();
         for (step, selection) in choices.iter().enumerate() {
             let index = session
@@ -220,54 +215,53 @@ pub fn run(
             None
         };
         let (_, after) = query(case, decoder, &writer, &mut model)?;
-        let mut row = json!({"id": case.id, "input": case.input, "context": case.context,
-                            "before": before, "selection": selection, "after": after});
+        let mut row = json!({"id": case.id, "input": case.input, "context": case.context});
+        row["before"] = before;
+        row["selection"] = selection.unwrap_or(Value::Null);
+        row["after"] = after;
         if case.selects.is_some() {
-            row["selections"] = json!(selections);
+            row["selections"] = Value::Array(selections);
         }
         rows.push(row);
     }
-    let mut seen = BTreeSet::new();
-    let mut final_queries = Vec::new();
-    for case in &cases {
-        if seen.insert((&case.input, &case.context)) {
-            let (_, result) = query(case, decoder, &writer, &mut model)?;
-            final_queries
-                .push(json!({"input": case.input, "context": case.context, "result": result}));
-        }
-    }
-    writer.finish()?;
-    let saved = fs::read(directory.join("learning.json")).or_else(|error| {
-        if error.kind() == std::io::ErrorKind::NotFound {
-            Ok(Vec::new())
-        } else {
-            Err(error)
-        }
-    })?;
-    let mut writer = LearningWriter::start(&directory, true, |error| eprintln!("{error}"))?;
-    seen.clear();
-    let mut reloaded = Vec::new();
-    for case in &cases {
-        if seen.insert((&case.input, &case.context)) {
-            let (_, result) = query(case, decoder, &writer, &mut model)?;
-            reloaded.push(json!({"input": case.input, "context": case.context, "result": result}));
-        }
-    }
-    writer.finish()?;
-    let unchanged = match fs::read(directory.join("learning.json")) {
-        Ok(bytes) => bytes == saved,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => saved.is_empty(),
-        Err(error) => return Err(error.into()),
+    let mut query_all = |writer: &LearningWriter| -> super::Result<Vec<Value>> {
+        let mut seen = BTreeSet::new();
+        cases
+            .iter()
+            .filter(|case| seen.insert((&case.input, &case.context)))
+            .map(|case| {
+                let (_, result) = query(case, decoder, writer, &mut model)?;
+                let mut row = json!({"input": case.input, "context": case.context});
+                row["result"] = result;
+                Ok(row)
+            })
+            .collect()
     };
+    let read_snapshot = || match fs::read(directory.join("learning.json")) {
+        Ok(bytes) => Ok(Some(bytes)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error),
+    };
+    let final_queries = query_all(&writer)?;
+    writer.finish()?;
+    let saved = read_snapshot()?;
+    let mut writer = LearningWriter::start(&directory, true, |error| eprintln!("{error}"))?;
+    let reloaded = query_all(&writer)?;
+    writer.finish()?;
+    let unchanged = read_snapshot()? == saved;
     let rankings_unchanged = reloaded == final_queries;
-    let report = json!({"format": "yanliu-learning-replay-v1", "state_dir": directory,
-        "rows": rows, "reloaded": reloaded, "before_reload": final_queries,
+    let queries_after_reload = reloaded.len();
+    let mut report = json!({"format": "yanliu-learning-replay-v1", "state_dir": directory,
         "reload_preserved_snapshot": unchanged, "reload_preserved_rankings": rankings_unchanged});
-    report_file.write_all(&serde_json::to_vec_pretty(&report)?)?;
+    report["rows"] = Value::Array(rows);
+    report["reloaded"] = Value::Array(reloaded);
+    report["before_reload"] = Value::Array(final_queries);
+    serde_json::to_writer_pretty(&mut report_file, &report)?;
+    report_file.flush()?;
     println!(
         "{}",
         serde_json::to_string(
-            &json!({"cases": cases.len(), "queries_after_reload": reloaded.len(), "reload_preserved_snapshot": unchanged, "reload_preserved_rankings": rankings_unchanged})
+            &json!({"cases": cases.len(), "queries_after_reload": queries_after_reload, "reload_preserved_snapshot": unchanged, "reload_preserved_rankings": rankings_unchanged})
         )?
     );
     Ok(())

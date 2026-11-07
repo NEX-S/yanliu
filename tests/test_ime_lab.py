@@ -103,6 +103,17 @@ class ImeLabTests(unittest.TestCase):
         self.assertEqual([(row["context"], row["gold"]) for row in accepted],
                          [(row["context"], row["gold"]) for row in generated])
 
+    def test_technical_pronunciations_found_in_generated_training_data(self):
+        for context, gold, expected in (
+                ("数据库连接超时后触发", "重试", "chongshi"),
+                ("发现丢包后观察是否触发", "重传", "chongchuan"),
+                ("实验表明该方案能抵抗", "重放攻击", "chongfanggongji"),
+                ("观察植物生长需要记录每日", "光照时长", "guangzhaoshichang"),
+                ("高并发写入时需要考虑", "行级锁", "hangjisuo"),
+                ("调整参数前需要核对", "最大报文段长度", "zuidabaowenduanchangdu")):
+            with self.subTest(gold=gold):
+                self.assertEqual(lab.pinyin(gold, context), expected)
+
     def test_seatbelt_compound_keeps_its_reading_inside_longer_targets(self):
         generated = [case(context="乘车时", gold="必须系安全带", bucket="daily")]
         accepted, rejected = lab.select_cases(generated, set(), 1, "a" * 64)

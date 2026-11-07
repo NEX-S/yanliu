@@ -266,7 +266,7 @@ impl Learning {
                     .iter()
                     .any(|index| prior.iter().any(|(scored, _)| scored == index))
         });
-        let (prior_rows, context_rows): (Vec<_>, Vec<_>) = prior
+        let prior_rows: Vec<_> = prior
             .into_iter()
             .flatten()
             .map(|&(index, _)| {
@@ -275,7 +275,7 @@ impl Learning {
                     features(raw, context, &candidates[index].text, Some(&mut contextual));
                 (forward, contextual)
             })
-            .unzip();
+            .collect();
         let chosen_features = if prior.is_none() && !rejected.is_empty() {
             features(raw, context, &chosen.text, None)
         } else {
@@ -300,16 +300,16 @@ impl Learning {
         let change = if rejected.is_empty() {
             None
         } else if let Some(prior) = prior {
-            let rows = &prior_rows;
             let selected_row = prior
                 .iter()
                 .position(|&(index, _)| index == selected)
                 .expect("selected candidate has a prior");
-            let personal: Vec<f32> = rows
+            let personal: Vec<f32> = prior_rows
                 .iter()
-                .map(|row| {
+                .map(|(forward, _)| {
                     state.adapter.as_ref().map_or(0.0, |adapter| {
-                        row.iter()
+                        forward
+                            .iter()
                             .map(|&(index, value)| adapter[index] * value)
                             .sum()
                     })
@@ -340,18 +340,20 @@ impl Learning {
                 .filter(|(_, score)| rejected.contains(&score.index))
                 .max_by(|(_, a), (_, b)| a.total.total_cmp(&b.total))
                 .expect("a rejected candidate has a prior");
+            let (selected_features, selected_context) = &prior_rows[selected_row];
+            let (opponent_features, opponent_context) = &prior_rows[opponent];
             let mut direction = vec![0.0; FEATURES];
-            for &(index, value) in &rows[selected_row] {
+            for &(index, value) in selected_features {
                 direction[index] += value;
             }
-            for &(index, value) in &rows[opponent] {
+            for &(index, value) in opponent_features {
                 direction[index] -= value;
             }
             let mut change = vec![0.0; FEATURES];
-            for &(index, value) in &context_rows[selected_row] {
+            for &(index, value) in selected_context {
                 change[index] += value;
             }
-            for &(index, value) in &context_rows[opponent] {
+            for &(index, value) in opponent_context {
                 change[index] -= value;
             }
             let slope: f32 = direction.iter().zip(&change).map(|(d, q)| d * q).sum();
@@ -633,13 +635,18 @@ fn unlock(lock: File, directory: &Path) -> io::Result<()> {
 /// Read the persisted preferences with the same validation as service startup.
 pub fn list(directory: &Path) -> io::Result<serde_json::Value> {
     let path = directory.join("learning.json");
-    let snapshot = State::load(&path)?.snapshot();
+    let state = State::load(&path)?;
+    let rows: Vec<_> = state
+        .counts
+        .into_iter()
+        .map(|((input, text), count)| Row { input, text, count })
+        .collect();
     Ok(serde_json::json!({
         "path": path,
-        "rows": snapshot.rows,
+        "rows": rows,
         "context_model": {
-            "updates": snapshot.updates,
-            "parameters": snapshot.adapter.map_or(0, |adapter| adapter.len()),
+            "updates": state.updates,
+            "parameters": state.adapter.map_or(0, |adapter| adapter.len()),
         },
     }))
 }

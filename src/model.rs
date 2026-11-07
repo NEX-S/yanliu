@@ -191,9 +191,7 @@ impl Model {
                 CandidateSource::ExactDictionary | CandidateSource::User
             )
             && considered_candidates().all(|candidate| {
-                answers_input(input, candidate)
-                    && candidate.source != CandidateSource::Completion
-                    && !candidate.source.is_correction()
+                answers_input(input, candidate) && !candidate.source.is_correction()
             });
         let (personal, counts) = match personal {
             Some(learning) => (

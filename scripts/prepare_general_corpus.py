@@ -162,16 +162,21 @@ def open_dedup(path):
     return connection
 
 
-def duplicate_reason(connection, normalized, keys):
-    if connection.execute("SELECT 1 FROM fingerprints WHERE key=?", (fingerprint(normalized),)).fetchone():
-        return "exact"
+def near_duplicates(connection, normalized, keys):
     if keys:
         placeholders = ",".join("?" for _ in keys)
         matches = connection.execute(f"SELECT document FROM shingles WHERE key IN ({placeholders}) GROUP BY document HAVING COUNT(*)>=2", keys)
         for (document,) in matches:
             previous = connection.execute("SELECT text FROM texts WHERE id=?", (document,)).fetchone()[0]
             if copied_text(normalized, previous):
-                return "near"
+                yield previous
+
+
+def duplicate_reason(connection, normalized, keys):
+    if connection.execute("SELECT 1 FROM fingerprints WHERE key=?", (fingerprint(normalized),)).fetchone():
+        return "exact"
+    if next(near_duplicates(connection, normalized, keys), None) is not None:
+        return "near"
     return None
 
 
@@ -386,12 +391,8 @@ def main():
                 previous_overlaps[exact] = "exact"
             keys = tuple(key for key in near_keys(normalized) if key in reference_shingles)
             if len(keys) >= 2:
-                placeholders = ",".join("?" for _ in keys)
-                matches = reference.execute(f"SELECT document FROM shingles WHERE key IN ({placeholders}) GROUP BY document HAVING COUNT(*)>=2", keys)
-                for (document,) in matches:
-                    previous = reference.execute("SELECT text FROM texts WHERE id=?", (document,)).fetchone()[0]
-                    if copied_text(normalized, previous):
-                        previous_overlaps.setdefault(fingerprint(previous), "near")
+                for previous in near_duplicates(reference, normalized, keys):
+                    previous_overlaps.setdefault(fingerprint(previous), "near")
             if number % 100000 == 0:
                 print(json.dumps({"stage": "previous_train_scan", "lines": number}), flush=True)
     previous_manifest["matching_fresh_paragraphs"] = len(previous_overlaps)

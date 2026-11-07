@@ -64,7 +64,7 @@ struct FileConfig {
 fn read_config(path: &Path) -> Result<FileConfig> {
     let bytes = std::fs::read(path)?;
     // Structs also deserialize from JSON arrays, field by field.
-    if !serde_json::from_slice::<serde_json::Value>(&bytes)?.is_object() {
+    if bytes.iter().find(|byte| !byte.is_ascii_whitespace()) != Some(&b'{') {
         return Err("config must be an object".into());
     }
     let file: FileConfig = serde_json::from_slice(&bytes)?;
